@@ -16,6 +16,7 @@ def apply_adjustments(image,state):
     if (black,white,gamma)!=(0,255,1):
         lut=[round(255*(max(0,min(1,(v-black)/(white-black)))**(1/gamma))) for v in range(256)]
         image=image.point(lut*3)
+    if state.get('brightness',100)!=100:image=ImageEnhance.Brightness(image).enhance(state['brightness']/100)
     if state.get('contrast',1)!=1:image=ImageEnhance.Contrast(image).enhance(state['contrast'])
     if state.get('saturation',1)!=1:image=ImageEnhance.Color(image).enhance(state['saturation'])
     if state.get('inverted',False):image=ImageOps.invert(image)
@@ -27,21 +28,21 @@ class AdjustmentDialog(QDialog):
     def __init__(self,image,state,kind,parent=None):
         super().__init__(parent)
         self.state=copy.deepcopy(state);self.controls={};self.value_controls={}
-        self.setWindowTitle('Níveis' if kind=='levels' else 'Nitidez')
+        self.setWindowTitle({'levels':'Níveis','sharpness':'Nitidez','brightness':'Brilho'}[kind])
         layout=QVBoxLayout(self)
-        layout.addWidget(QLabel('Ajuste sombras, meios-tons e luzes.' if kind=='levels' else 'Realça bordas e texturas. 0 = desativado.'))
+        layout.addWidget(QLabel({'levels':'Ajuste sombras, meios-tons e luzes.', 'sharpness':'Realça bordas e texturas. 0 = desativado.', 'brightness':'100% = original; abaixo escurece, acima clareia.'}[kind]))
         w,h=image.size;cw,ch=min(w,640),min(h,420)
         self.sample=image.crop(((w-cw)//2,(h-ch)//2,(w-cw)//2+cw,(h-ch)//2+ch))
         self.preview=QLabel();self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter);layout.addWidget(self.preview)
         layout.addWidget(QLabel('Prévia central em pixels originais, com os ajustes atuais.'))
         form=QFormLayout();layout.addLayout(form)
-        fields=[('Preto','black_point',0,254),('Branco','white_point',1,255),('Meios-tons','gamma',0.1,5)] if kind=='levels' else [('Intensidade (%)','sharpness',0,300)]
+        fields=[('Preto','black_point',0,254),('Branco','white_point',1,255),('Meios-tons','gamma',0.1,5)] if kind=='levels' else [('Brilho (%)','brightness',0,200)] if kind=='brightness' else [('Intensidade (%)','sharpness',0,300)]
         for label,key,low,high in fields:
             spin=QDoubleSpinBox() if key=='gamma' else QSpinBox()
             spin.setRange(low,high)
             if key=='gamma':spin.setSingleStep(0.1);spin.setDecimals(2)
             spin.setValue(self.state[key]);self.controls[key]=spin
-            default={"black_point":0,"white_point":255,"gamma":1,"sharpness":0}[key]
+            default={"black_point":0,"white_point":255,"gamma":1,"sharpness":0,"brightness":100}[key]
             control=ValueControl(spin,high,default)
             self.value_controls[key]=control
             form.addRow(label,control)

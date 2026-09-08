@@ -14,6 +14,32 @@ class DetailTests(unittest.TestCase):
     image=navigation.DownloadNavigationTests.image
     window=navigation.DownloadNavigationTests.window
 
+    def test_brightness_lightens_darkens_and_preserves_alpha(self):
+        image=Image.new('RGBA',(5,5),(80,100,120,90))
+        state=empty_state()
+        self.assertEqual(apply_adjustments(image,state).getpixel((0,0)),(80,100,120,90))
+        state['brightness']=50
+        self.assertEqual(apply_adjustments(image,state).getpixel((0,0)),(40,50,60,90))
+        state['brightness']=150
+        self.assertEqual(apply_adjustments(image,state).getpixel((0,0)),(120,150,180,90))
+
+    def test_brightness_dialog_persistence_undo_and_defaults(self):
+        path=self.image(1,'brightness.png');original=path.read_bytes();window=self.window()
+        dialog=AdjustmentDialog(window.original_image,empty_state(),'brightness');self.addCleanup(dialog.close)
+        dialog.value_controls['brightness'].presets[70][0].click()
+        self.assertEqual(dialog.state['brightness'],140)
+        with patch('app.AdjustmentDialog') as dialog_type:
+            dialog_type.return_value.exec.return_value=QDialog.DialogCode.Accepted
+            dialog_type.return_value.state=dialog.state
+            window._adjust_detail('brightness')
+        self.assertEqual(AnnotationDocument(path).state['brightness'],140)
+        self.assertTrue(is_edited(path))
+        window._undo_annotation();self.assertEqual(window.brightness,100)
+        window._undo_annotation(redo=True);self.assertEqual(window.brightness,140)
+        reopened=self.window();self.assertEqual(reopened.brightness,140)
+        reopened._reset_adjustments();self.assertEqual(reopened.brightness,100)
+        self.assertEqual(path.read_bytes(),original)
+
     def test_levels_map_endpoints_and_preserve_alpha(self):
         image=Image.new('RGBA',(3,1));image.putdata([(40,40,40,10),(100,100,100,80),(180,180,180,200)])
         state=empty_state();state.update(black_point=40,white_point=180)

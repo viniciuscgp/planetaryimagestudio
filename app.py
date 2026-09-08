@@ -279,6 +279,8 @@ class ImageView(QGraphicsView):
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._emit_context_request)
 
+        self._middle_panning = False
+        self._middle_pan_start = None
         self._panning = False
         self._pan_start = None
         self._has_image = False
@@ -346,6 +348,20 @@ class ImageView(QGraphicsView):
         super().wheelEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.MiddleButton and self._has_image:
+            if self._drawing:
+                self._drawing = False
+                self.drawing_event.emit("release", self.mapToScene(event.position().toPoint()))
+            self._panning = False
+            self._pan_start = None
+            self._middle_panning = True
+            self._middle_pan_start = event.position().toPoint()
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        if self._middle_panning:
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._has_image and self.drawing_tool != "pan":
             self._drawing = True
             self.drawing_event.emit("press", self.mapToScene(event.position().toPoint()))
@@ -364,6 +380,14 @@ class ImageView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._middle_panning and self._middle_pan_start is not None:
+            current = event.position().toPoint()
+            delta = current - self._middle_pan_start
+            self._middle_pan_start = current
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            event.accept()
+            return
         if self._drawing:
             self.drawing_event.emit("move", self.mapToScene(event.position().toPoint()))
             event.accept()
@@ -379,6 +403,16 @@ class ImageView(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.MiddleButton and self._middle_panning:
+            self._middle_panning = False
+            self._middle_pan_start = None
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor if self.drawing_tool == "pan" else
+                                      Qt.CursorShape.ArrowCursor if self.drawing_tool == "select" else Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
+        if self._middle_panning:
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._drawing:
             self._drawing = False
             self.drawing_event.emit("release", self.mapToScene(event.position().toPoint()))
@@ -526,6 +560,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.inverted = False
         self.smoothing = 0
         self.black_point, self.white_point, self.gamma, self.sharpness = 0, 255, 1.0, 0
+        self.brightness = 100
 
         self.metadata_client = self.source.create_metadata_client()
         self.thread_pool = QThreadPool.globalInstance()
@@ -787,6 +822,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.act_fit = self._make_action("Ajustar à janela", self.image_view.fit_image, "F")
         self.act_actual = self._make_action("Tamanho real (1:1)", self.image_view.actual_size, "1")
 
+        self.act_brightness = self._make_action("Brilho…", lambda: self._adjust_detail("brightness"))
         self.act_levels = self._make_action("Níveis…", lambda: self._adjust_detail("levels"))
         self.act_sharpen = self._make_action("Nitidez…", lambda: self._adjust_detail("sharpness"))
         self.act_original = self._make_action("Comparar original", self._toggle_original, "Ctrl+Shift+O")
@@ -856,6 +892,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         menu_image.addAction(self.act_smooth)
         menu_image.addAction(self.act_levels)
         menu_image.addAction(self.act_sharpen)
+        menu_image.addAction(self.act_brightness)
         menu_image.addSeparator()
         menu_image.addAction(self.act_original)
 
@@ -890,6 +927,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         toolbar.addAction(self.act_fit)
         toolbar.addAction(self.act_actual)
         toolbar.addAction(self.act_original)
+        toolbar.addAction(self.act_brightness)
         toolbar.addSeparator()
         toolbar.addAction(self.act_contrast_down)
         toolbar.addAction(self.act_contrast_up)
@@ -1823,7 +1861,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             return
 
         self.act_original.setChecked(False)
-        state = {key: getattr(self, key) for key in ("smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness")}
+        state = {key: getattr(self, key) for key in ("smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness", "brightness")}
         image = apply_adjustments(self.original_image, state)
         self._annotation_base = pil_to_qimage(image)
         self._show_annotations(fit=fit)
@@ -1842,7 +1880,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         dialog = AdjustmentDialog(self.original_image, self._annotation_document.state, kind, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        keys = ("black_point", "white_point", "gamma") if kind == "levels" else ("sharpness",)
+        keys = ("black_point", "white_point", "gamma") if kind == "levels" else (kind,)
         if all(getattr(self, key) == dialog.state[key] for key in keys):
             return
         for key in keys:
@@ -1919,6 +1957,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.inverted = False
         self.smoothing = 0
         self.black_point, self.white_point, self.gamma, self.sharpness = 0, 255, 1.0, 0
+        self.brightness = 100
         self._clear_region()
         self._render_current(fit=True)
         self._commit_adjustments()
@@ -1962,6 +2001,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         menu = QMenu(self)
         menu.addAction(self.act_levels)
         menu.addAction(self.act_sharpen)
+        menu.addAction(self.act_brightness)
         menu.addAction(self.act_smooth)
         menu.addSeparator()
         menu.addAction(self.act_contrast_up)

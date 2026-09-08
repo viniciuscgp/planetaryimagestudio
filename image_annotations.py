@@ -18,7 +18,7 @@ HISTORY_LIMIT = 50
 
 
 def empty_state():
-    return {"drawings": [], "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0}
+    return {"drawings": [], "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0, "brightness": 100}
 
 
 def number(value, minimum, maximum):
@@ -28,6 +28,7 @@ def number(value, minimum, maximum):
 
 
 def validate_state(state):
+    number(state.setdefault("brightness", 100), 0, 200)
     number(state.setdefault("black_point", 0), 0, 254)
     number(state.setdefault("white_point", 255), 1, 255)
     number(state.setdefault("gamma", 1.0), 0.1, 5)
@@ -268,6 +269,8 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self._clear_region()
         self._draft_drawing = None
         self.image_view._drawing = False
+        self.image_view._middle_panning = False
+        self.image_view._middle_pan_start = None
         self.image_view._panning = False
         self.image_view._pan_start = None
         self.image_view.drawing_tool = action.data()
@@ -327,14 +330,14 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.contrast, self.saturation, self.rotation = state["contrast"], state["saturation"], state["rotation"]
         self.inverted = state["inverted"]
         self.smoothing = state["smoothing"]
-        for key in ("black_point", "white_point", "gamma", "sharpness"):
+        for key in ("black_point", "white_point", "gamma", "sharpness", "brightness"):
             setattr(self, key, state[key])
         self._sync_annotation_controls()
 
     def _sync_annotation_controls(self):
         document = self._annotation_document
         self.act_smooth.setEnabled(document is not None)
-        for action in (self.act_levels, self.act_sharpen, self.act_original):
+        for action in (self.act_levels, self.act_sharpen, self.act_original, self.act_brightness):
             action.setEnabled(document is not None)
         self.act_invert.setChecked(bool(document and document.state["inverted"]))
         self.act_undo_annotation.setEnabled(bool(document and document.undo))
@@ -385,7 +388,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         if self._annotation_document is None:
             return
         state = copy.deepcopy(self._annotation_document.state)
-        state.update(contrast=self.contrast, saturation=self.saturation, rotation=self.rotation, inverted=self.inverted, smoothing=self.smoothing, black_point=self.black_point, white_point=self.white_point, gamma=self.gamma, sharpness=self.sharpness)
+        state.update(contrast=self.contrast, saturation=self.saturation, rotation=self.rotation, inverted=self.inverted, smoothing=self.smoothing, black_point=self.black_point, white_point=self.white_point, gamma=self.gamma, sharpness=self.sharpness, brightness=self.brightness)
         self._annotation_document.commit(state)
         self._persist_annotations()
 

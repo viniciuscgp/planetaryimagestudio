@@ -258,3 +258,9 @@ Níveis, Nitidez e Suavização oferecem barras deslizantes maiores, valor numé
 
 
 A faixa de miniaturas tem uma divisória horizontal acima dos filtros. Arraste para cima para ampliar as miniaturas ou para baixo para liberar espaço à imagem principal. As miniaturas acompanham a altura e continuam em uma única linha com rolagem horizontal. A altura escolhida é salva na sessão. O zoom manual da imagem é mantido; no modo Ajustar à janela, a imagem acompanha a área disponível.
+
+
+**Botão central (rodinha) + arrastar:** move a imagem temporariamente com qualquer ferramenta selecionada. Ao soltar, a ferramenta permanece selecionada; o movimento não cria marcações. Girar a rodinha continua controlando o zoom. Se o botão central for pressionado durante um traço, o traço é concluído antes de iniciar o pan.
+
+
+**Brilho…**, no menu Imagem, botão direito e barra principal, clareia ou escurece a imagem com prévia. O valor neutro é **100%**; abaixo escurece, acima clareia, até 200%. Os atalhos representam frações do máximo: 50% do máximo equivale ao valor neutro 100. **Padrão** volta diretamente a 100. O brilho fica salvo por imagem, entra em Editadas e suporta desfazer/refazer, reset, comparação e cópia/exportação final.
