@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Personal sessions and research data
+*_state.json
+*.annotations.json
+*.tmp
+*.part
+/data/
+/images/
+.env
+
+*.source.json
+.archive-download.json
+*_state.json.*.bak
