@@ -51,7 +51,8 @@ class FilterJob(QRunnable):
         result=[];count=0
         try:
             for key,folder in self.folders:
-                for path in list_images(folder):
+                if self.cancel.is_set():return
+                for path in list_images(folder, self.cancel):
                     if self.cancel.is_set():return
                     count+=1
                     if count%100==0:self.signals.progress.emit(self.token,count)
@@ -102,7 +103,7 @@ class ImageFiltersMixin:
             folders=self.source.list_collections(self.root)
         else:
             folders=[(self.current_sol,self.current_folder)] if self.current_folder else []
-        self.filter_count.setText('Buscando…')
+        if not background:self.filter_count.setText('Buscando…')
         job=FilterJob(self._filter_token,folders,self.filter_color.isChecked(),self.filter_edited.isChecked(),self._color_cache)
         self._filter_jobs[self._filter_token]=job
         job.signals.done.connect(self._image_filter_done)
@@ -110,7 +111,7 @@ class ImageFiltersMixin:
         self._filter_pool.start(job)
 
     def _image_filter_progress(self,token,count):
-        if token==self._filter_token:self.filter_count.setText(f'{count} verificadas…')
+        if token==self._filter_token and not self._filter_background:self.filter_count.setText(f'{count} verificadas…')
 
     def _image_filter_done(self,token,rows):
         self._filter_jobs.pop(token,None)
@@ -119,12 +120,15 @@ class ImageFiltersMixin:
             # Downloads must not rebuild/reselect a list that the user is browsing.
             known={str(path) for path in self.current_images}
             scroll=self.thumb_list.horizontalScrollBar().value()
+            added = False
             for key,folder,path in rows:
                 if str(path) in known:continue
                 known.add(str(path));self._filter_results[str(path)]=(key,folder)
                 self.current_images.append(path)
                 item=QListWidgetItem(path.name);item.setData(Qt.ItemDataRole.UserRole,str(path));item.setToolTip(str(path))
                 self.thumb_list.addItem(item);self._thumb_queue.append((item,path))
+                added = True
+            if not added:return
             self.thumb_list.doItemsLayout()
             self.thumb_list.horizontalScrollBar().setValue(scroll)
             self.filter_count.setText(f'{len(self.current_images)} imagens')

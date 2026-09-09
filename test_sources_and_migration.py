@@ -96,11 +96,11 @@ class SourceTests(unittest.TestCase):
         worker.file_downloaded.connect(lambda sol, path: downloaded.append(Path(path)))
         worker.finished.connect(finished.append)
         worker.failed.connect(failures.append)
-        items = [{"url": "https://example.invalid/sample.jpg"}]
+        items = [{"sol": 10, "url": "https://example.invalid/sample.jpg"}]
         def download(sol, url, destination, filename):
             destination.write_bytes(b"test image data")
             return True
-        with patch.object(worker, "_sol_items", return_value=items), patch.object(worker, "_download_file", side_effect=download) as fetch:
+        with patch.object(worker, "_prepare_catalog"), patch.object(worker, "_latest_nasa_sol", return_value=10), patch.object(worker, "_sol_items", return_value=items), patch.object(worker, "_download_file", side_effect=download) as fetch:
             worker.run()
             self.assertEqual(fetch.call_count, 1)
             worker.run()

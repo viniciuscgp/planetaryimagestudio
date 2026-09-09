@@ -7,12 +7,15 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 import requests
 from PySide6.QtCore import QObject, QThread, Signal
 
 from config import APP_NAME, APP_VERSION, APP_AUTHOR
 from .base import ImageSource
+from .network import CancellableSession
+from .catalog_cache import CatalogCache
 
 NASA_API = "https://mars.nasa.gov/api/v1/raw_image_items/"
 NASA_RAW_IMAGES = "https://mars.nasa.gov/msl/multimedia/raw-images/"
@@ -44,7 +47,7 @@ class MetadataClient:
     def __init__(self) -> None:
         self._cache: dict[tuple[str, int], dict[str, Any]] = {}
         self._lock = threading.Lock()
-        self.session = requests.Session()
+        self.session = CancellableSession()
         self.session.headers.update({"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
 
     @staticmethod
@@ -208,6 +211,8 @@ class DownloaderWorker(QObject):
     """Atualiza as imagens do Curiosity sem bloquear a interface Qt."""
 
     message = Signal(str)
+    catalog_progress = Signal(int, int)
+    catalog_id = 'curiosity'
     sol_started = Signal(int, int, int)        # sol, posição, total de sols
     sol_catalogued = Signal(int, int)          # sol, total de registros/imagens
     sol_progress = Signal(int, int, int)       # sol, concluídos, total
@@ -230,16 +235,116 @@ class DownloaderWorker(QObject):
         self.only_sol = only_sol
         self.start_sol = start_sol
         self._stop_event = threading.Event()
-        self.session = requests.Session()
+        self.catalog_cache = CatalogCache(self.root, self.catalog_id)
+        self.clear_catalog_cache = False
+        self._catalog_checked = set()
+        self.catalog_workers = 3
+        self._catalog_abort = threading.Event()
+        self._catalog_sessions_lock = threading.Lock()
+        self._catalog_sessions = []
+        self._catalog_session_local = None
+        self.session = CancellableSession(retry_message=self.message.emit)
         self.session.headers.update({
             "User-Agent": f"{APP_NAME}/{APP_VERSION} - {APP_AUTHOR}"
         })
 
     def stop(self) -> None:
         self._stop_event.set()
+        self.session.cancel()
+        with self._catalog_sessions_lock:
+            for session in self._catalog_sessions:
+                session.cancel()
 
     def _stopped(self) -> bool:
-        return self._stop_event.is_set() or QThread.currentThread().isInterruptionRequested()
+        return self._stop_event.is_set() or self._catalog_abort.is_set() or QThread.currentThread().isInterruptionRequested()
+
+    def _request_session(self):
+        local = self._catalog_session_local
+        if local is None:
+            return self.session
+        if not hasattr(local, 'session'):
+            with self._catalog_sessions_lock:
+                if self._stopped():
+                    raise InterruptedError('Leitura do catálogo interrompida.')
+                local.session = CancellableSession(retry_message=self.message.emit)
+                local.session.headers.update(self.session.headers)
+                self._catalog_sessions.append(local.session)
+        return local.session
+
+    def _cached_sol_items(self, sol, latest):
+        if self._stopped():
+            raise InterruptedError('Atualização interrompida.')
+        age = 7 * 86400 if sol < latest - 7 else 300
+        if sol in self._catalog_checked:
+            age = float('inf')
+        items = self.catalog_cache.read(sol, age)
+        if items is None:
+            items = self._sol_items(sol)
+            if self._stopped():
+                raise InterruptedError('Atualização interrompida.')
+            if any(int(item.get('sol', -1)) != sol for item in items):
+                raise RuntimeError(f'O catálogo retornou imagens de outro SOL ao consultar {sol}.')
+            # Downloads need URLs and IDs, not the large scientific metadata
+            # payload repeated for every image in the remote catalog.
+            compact = [{'sol': sol, 'imageid': item.get('imageid'),
+                        'image_files': {'full_res': self._image_url(item)}} for item in items]
+            self.catalog_cache.save(sol, compact)
+        self._catalog_checked.add(sol)
+        return items
+
+    def _prepare_catalog(self, latest):
+        if self.clear_catalog_cache:
+            self.message.emit('Limpando cache de catálogos; imagens e marcações serão preservadas...')
+            self.catalog_cache.clear(self._stopped)
+            self.clear_catalog_cache = False
+        self.message.emit(f'Conferindo catálogo completo: SOL 0 até SOL {latest}, antes dos downloads...')
+        if self.catalog_workers == 1:
+            for sol in range(latest + 1):
+                self.catalog_progress.emit(sol, latest + 1)
+                self._cached_sol_items(sol, latest)
+        else:
+            self._prepare_catalog_parallel(latest)
+        if self._stopped():
+            raise InterruptedError('Atualização interrompida.')
+        self.catalog_cache.complete(latest)
+        self.catalog_progress.emit(latest + 1, latest + 1)
+        self.message.emit(f'Catálogo completo conferido e salvo: {latest + 1} SOLs, incluindo os vazios.')
+
+    def _prepare_catalog_parallel(self, latest):
+        self._catalog_session_local = threading.local()
+        self._catalog_abort.clear()
+        def check(sol):
+            self._cached_sol_items(sol, latest)
+        sols = iter(range(latest + 1))
+        completed = 0
+        try:
+            with ThreadPoolExecutor(max_workers=self.catalog_workers, thread_name_prefix='catalog') as pool:
+                pending = {pool.submit(check, sol) for sol in [next(sols, None) for _ in range(self.catalog_workers)] if sol is not None}
+                try:
+                    while pending:
+                        if self._stopped():
+                            raise InterruptedError('Leitura do catálogo interrompida.')
+                        done, pending = wait(pending, timeout=.1, return_when=FIRST_COMPLETED)
+                        for future in done:
+                            future.result()
+                            completed += 1
+                            self.catalog_progress.emit(completed, latest + 1)
+                            sol = next(sols, None)
+                            if sol is not None:
+                                pending.add(pool.submit(check, sol))
+                except BaseException:
+                    self._catalog_abort.set()
+                    with self._catalog_sessions_lock:
+                        for session in self._catalog_sessions:
+                            session.cancel()
+                    for future in pending:
+                        future.cancel()
+                    raise
+        finally:
+            for session in self._catalog_sessions:
+                session.close()
+            self._catalog_sessions.clear()
+            self._catalog_session_local = None
 
     @staticmethod
     def _extract_items(data: Any) -> list[dict[str, Any]]:
@@ -289,12 +394,14 @@ class DownloaderWorker(QObject):
             if self._stopped():
                 raise InterruptedError("Atualização interrompida.")
             try:
-                response = self.session.get(NASA_API, params=params, timeout=timeout)
+                response = self._request_session().get(NASA_API, params=params, timeout=timeout)
                 response.raise_for_status()
                 data = response.json()
                 if not isinstance(data, dict):
                     raise RuntimeError("Resposta inesperada da NASA.")
                 return data
+            except InterruptedError:
+                raise
             except Exception as exc:
                 last_exc = exc
                 if attempt < 2 and not self._stopped():
@@ -323,7 +430,9 @@ class DownloaderWorker(QObject):
         return folders[0][0] if folders else None
 
     def _folder_for_sol(self, sol: int) -> Path:
-        folders = list_sol_folders(self.root)
+        if not hasattr(self, '_known_sol_folders'):
+            self._known_sol_folders = list_sol_folders(self.root)
+        folders = self._known_sol_folders
         for existing_sol, folder in folders:
             if existing_sol == sol:
                 return folder
@@ -374,6 +483,16 @@ class DownloaderWorker(QObject):
         return items_all
 
     def _download_file(self, sol: int, url: str, destination: Path, filename: str) -> bool:
+        attempt = 0
+        while not self._stopped():
+            try:
+                return self._download_file_once(sol, url, destination, filename)
+            except requests.RequestException as exc:
+                attempt += 1
+                self.session.wait_retry(exc, attempt)
+        raise InterruptedError("Atualização interrompida.")
+
+    def _download_file_once(self, sol: int, url: str, destination: Path, filename: str) -> bool:
         if url.startswith("/"):
             url = "https://mars.nasa.gov" + url
 
@@ -464,6 +583,9 @@ class DownloaderWorker(QObject):
 
     def run(self) -> None:
         try:
+            self.message.emit('Consultando o último SOL disponível na NASA...')
+            catalog_latest = self._latest_nasa_sol()
+            self._prepare_catalog(catalog_latest)
             if self.only_sol is not None:
                 start_sol = self.only_sol
                 latest = self.only_sol
@@ -472,7 +594,7 @@ class DownloaderWorker(QObject):
 
             else:
                 self.message.emit("Consultando o último SOL disponível na NASA...")
-                latest = self._latest_nasa_sol()
+                latest = catalog_latest
                 if self._stopped():
                     self.finished.emit("Atualização interrompida.")
                     return
@@ -483,9 +605,8 @@ class DownloaderWorker(QObject):
                         f"Reverificando do SOL {start_sol} até SOL {latest}..."
                     )
                 else:
-                    local_last = self._local_last_sol()
-                    # Atualização normal: começa no último SOL local.
-                    start_sol = local_last if local_last is not None else latest
+                    # The cached full catalog also reveals gaps in local SOLs.
+                    start_sol = 0
 
                 if start_sol > latest:
                     self.finished.emit(
@@ -503,7 +624,7 @@ class DownloaderWorker(QObject):
                     return
 
                 self.sol_started.emit(sol, sol_pos, total_sols)
-                items = self._sol_items(sol)
+                items = self._cached_sol_items(sol, catalog_latest)
                 if self._stopped():
                     self.finished.emit("Atualização interrompida.")
                     return

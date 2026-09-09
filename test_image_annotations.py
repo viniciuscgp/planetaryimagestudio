@@ -19,6 +19,9 @@ class AnnotationTests(unittest.TestCase):
     window = navigation.DownloadNavigationTests.window
 
     def draw(self, window, tool, start=(15, 15), end=(40, 30)):
+        # Exercise backward compatibility with existing center/radius circles.
+        if tool == "circle":
+            window.image_view.drawing_tool = "circle"
         for action in window._drawing_tools.actions():
             if action.data() == tool:
                 action.trigger()

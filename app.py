@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -17,11 +18,13 @@ from PIL import Image, ImageEnhance, ImageFile, ImageOps
 
 from image_annotations import AnnotationWindowMixin, composite_image
 from image_filters import ImageFiltersMixin
+from sol_annotations import SolAnnotationsMixin, AnnotationThumbnailDelegate
 from image_smoothing import SmoothingDialog, smooth_image
 from image_adjustments import AdjustmentDialog, apply_adjustments
+from inline_adjustments import InlineAdjustmentsMixin
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThread, QThreadPool, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon, QImage, QImageReader, QKeySequence, QPalette, QPen, QPixmap
+from PySide6.QtCore import QByteArray, QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThread, QThreadPool, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QImage, QImageReader, QKeySequence, QPalette, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -285,6 +288,7 @@ class ImageView(QGraphicsView):
         self._pan_start = None
         self._has_image = False
         self._fit_mode = True
+        self._fitting_image = False
         self.drawing_tool = "pan"
         self._drawing = False
         self.selection_rect = None
@@ -311,7 +315,6 @@ class ImageView(QGraphicsView):
             return
 
         if fit:
-            self.resetTransform()
             QTimer.singleShot(0, self.fit_image)
         else:
             # Restore exact scroll positions. Repeated centerOn(mapToScene(...))
@@ -321,11 +324,23 @@ class ImageView(QGraphicsView):
             self.verticalScrollBar().setValue(old_vertical)
 
     def fit_image(self) -> None:
-        if not self._has_image:
+        if not self._has_image or self._fitting_image:
             return
-        self.resetTransform()
-        self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
-        self._fit_mode = True
+        self._fitting_image = True
+        try:
+            bounds = self._pixmap_item.boundingRect()
+            available = self.maximumViewportSize()
+            if bounds.isEmpty() or available.width() <= 4 or available.height() <= 4:
+                return
+            # Apply the final scale directly. Resetting to 1:1 can toggle the
+            # scrollbars and recursively trigger resizeEvent while fitting.
+            scale = min((available.width() - 4) / bounds.width(),
+                        (available.height() - 4) / bounds.height())
+            self._fit_mode = True
+            self.setTransform(QTransform.fromScale(scale, scale))
+            self.centerOn(bounds.center())
+        finally:
+            self._fitting_image = False
 
     def actual_size(self) -> None:
         if not self._has_image:
@@ -469,13 +484,18 @@ class MetadataWorker(QRunnable):
         self.filename = filename
         self.sol = sol
         self.signals = MetadataWorkerSignals()
+        self.cancel = threading.Event()
 
     def run(self) -> None:
         try:
+            if self.cancel.is_set():
+                return
             info = self.client.lookup(self.filename, self.sol)
-            self.signals.finished.emit(info)
+            if not self.cancel.is_set():
+                self.signals.finished.emit(info)
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            if not self.cancel.is_set():
+                self.signals.error.emit(str(exc))
 
 
 class ImageAboutDialog(QDialog):
@@ -533,7 +553,7 @@ class ImageAboutDialog(QDialog):
         layout.addLayout(buttons)
 
 
-class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
+class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
     def __init__(self, root: Path, initial_state: dict[str, Any] | None = None, source: ImageSource | str | None = None) -> None:
         super().__init__()
         self._state = dict(initial_state or load_app_state())
@@ -563,7 +583,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.brightness = 100
 
         self.metadata_client = self.source.create_metadata_client()
-        self.thread_pool = QThreadPool.globalInstance()
+        self.thread_pool = QThreadPool(self)
+        self.thread_pool.setMaxThreadCount(2)
         self._thumb_timer = QTimer(self)
         self._thumb_timer.timeout.connect(self._load_thumb_batch)
         self._thumb_queue: list[tuple[QListWidgetItem, Path]] = []
@@ -572,6 +593,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._download_thread: QThread | None = None
         self._download_worker: QObject | None = None
         self._download_restart_pending = False
+        self._catalog_reload_requested = False
         self._download_panel_open = bool(self._state.get("download_panel_open", True))
         self._download_panel_width = int(self._state.get("download_panel_width", 330) or 330)
         self._download_mode: str | None = None
@@ -586,6 +608,9 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._download_user_stop_requested = False
         self._download_paused = bool((self._state.get("download") or {}).get("paused", False))
         self._closing = False
+        self._shutdown_timer = QTimer(self)
+        self._shutdown_timer.setInterval(50)
+        self._shutdown_timer.timeout.connect(self._finish_shutdown)
 
         self.setWindowTitle(f"{APP_NAME} — {APP_AUTHOR} — {self.root}")
         saved_size = self._state.get("window_size")
@@ -603,6 +628,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._build_menus()
         self._build_toolbar()
         self._build_annotation_toolbar()
+        self._build_inline_adjustments()
+        self._init_sol_annotations()
         self._load_sol_list()
         self._restore_saved_ui_state()
         self._update_source_controls()
@@ -628,17 +655,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.image_view.context_requested.connect(self._show_image_context_menu)
 
         self.thumb_list = ThumbnailList()
-        # Keep the sidebar's active selection color even when focus is on the image.
-        selection_color = self.sol_list.palette().color(QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight).name()
-        selection_text = self.sol_list.palette().color(QPalette.ColorGroup.Active, QPalette.ColorRole.HighlightedText).name()
-        self.thumb_list.setStyleSheet(f"""
-            QListWidget::item {{ border: 3px solid transparent; border-radius: 4px; padding: 3px; }}
-            QListWidget::item:selected {{
-                background-color: {selection_color};
-                border-color: {selection_color};
-                color: {selection_text};
-            }}
-        """)
+        self.thumb_list.setItemDelegate(AnnotationThumbnailDelegate(self.thumb_list))
         self.thumb_list.setViewMode(QListWidget.ViewMode.IconMode)
         self.thumb_list.setFlow(QListWidget.Flow.LeftToRight)
         self.thumb_list.setWrapping(False)
@@ -822,12 +839,12 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.act_fit = self._make_action("Ajustar à janela", self.image_view.fit_image, "F")
         self.act_actual = self._make_action("Tamanho real (1:1)", self.image_view.actual_size, "1")
 
-        self.act_brightness = self._make_action("Brilho…", lambda: self._adjust_detail("brightness"))
-        self.act_levels = self._make_action("Níveis…", lambda: self._adjust_detail("levels"))
-        self.act_sharpen = self._make_action("Nitidez…", lambda: self._adjust_detail("sharpness"))
+        self.act_brightness = self._make_action("Brilho…", lambda: self._focus_inline_adjustment("brightness"))
+        self.act_levels = self._make_action("Níveis…", lambda: self._focus_inline_adjustment("gamma"))
+        self.act_sharpen = self._make_action("Nitidez…", lambda: self._focus_inline_adjustment("sharpness"))
         self.act_original = self._make_action("Comparar original", self._toggle_original, "Ctrl+Shift+O")
         self.act_original.setCheckable(True)
-        self.act_smooth = self._make_action("Suavizar imagem…", self._smooth_image)
+        self.act_smooth = self._make_action("Suavizar imagem", lambda: self._focus_inline_adjustment("smoothing"))
         self.act_contrast_up = self._make_action("Contraste +", lambda: self._adjust_contrast(0.10), "]")
         self.act_contrast_down = self._make_action("Contraste -", lambda: self._adjust_contrast(-0.10), "[")
         self.act_color_up = self._make_action("Cor +", lambda: self._adjust_saturation(0.10))
@@ -854,6 +871,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.act_download_stop = self._make_action("Parar downloader", self._toggle_download_pause)
         self.act_download_stop.setEnabled(False)
         self.act_download_panel = self._make_action("Mostrar/ocultar painel", self._toggle_download_panel)
+        self.act_clear_catalog_cache = self._make_action("Limpar cache de catálogos e reler tudo", self._clear_catalog_cache)
 
         self.act_about_app = self._make_action("Sobre o programa", self._about_app)
 
@@ -902,6 +920,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         menu_download.addAction(self.act_download_selected)
         menu_download.addAction(self.act_download_stop)
         menu_download.addSeparator()
+        menu_download.addAction(self.act_clear_catalog_cache)
+        menu_download.addSeparator()
         menu_download.addAction(self.act_download_panel)
 
         menu_help = self.menuBar().addMenu("Ajuda")
@@ -909,11 +929,13 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Ferramentas", self)
+        toolbar.setObjectName("main_toolbar")
         toolbar.setMovable(True)
         toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.addToolBar(toolbar)
 
         mission_toolbar = QToolBar("Missão de trabalho", self)
+        mission_toolbar.setObjectName("mission_toolbar")
         self.addToolBar(mission_toolbar)
         mission_toolbar.addWidget(QLabel("Missão de trabalho: "))
         self.mission_selector = QComboBox()
@@ -927,12 +949,6 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         toolbar.addAction(self.act_fit)
         toolbar.addAction(self.act_actual)
         toolbar.addAction(self.act_original)
-        toolbar.addAction(self.act_brightness)
-        toolbar.addSeparator()
-        toolbar.addAction(self.act_contrast_down)
-        toolbar.addAction(self.act_contrast_up)
-        toolbar.addAction(self.act_color_down)
-        toolbar.addAction(self.act_color_up)
         toolbar.addSeparator()
         toolbar.addAction(self.act_rotate_left)
         toolbar.addAction(self.act_rotate_right)
@@ -1028,6 +1044,12 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._save_state()
 
     def _restore_saved_ui_state(self) -> None:
+        layout = self._state.get("toolbar_layout")
+        if isinstance(layout, str):
+            try:
+                self.restoreState(QByteArray(bytes.fromhex(layout)), 1)
+            except ValueError:
+                pass
         height = self._state.get("thumbnail_panel_height", self._thumb_panel_height)
         if isinstance(height, (int, float)):
             self._thumb_panel_height = max(100, min(500, int(height)))
@@ -1133,6 +1155,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             "root": str(self.root),
             "window_size": [int(self.width()), int(self.height())],
             "window_maximized": bool(self.isMaximized()),
+            "toolbar_layout": bytes(self.saveState(1)).hex(),
             "splitter_sizes": [int(v) for v in sizes],
             "thumbnail_panel_height": self._thumb_panel_height,
             "download_panel_open": bool(self._download_panel_open),
@@ -1217,7 +1240,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         only_sol: int | None = None,
         start_sol: int | None = None,
     ) -> None:
-        if not self.source.supports_downloads:
+        if self._closing or not self.source.supports_downloads:
             return
         if self._download_thread is not None and self._download_thread.isRunning():
             self.download_status.setText("O downloader já está em execução.")
@@ -1284,11 +1307,15 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             start_sol=start_sol,
         )
         worker.moveToThread(thread)
+        if self._catalog_reload_requested:
+            worker.clear_catalog_cache = True
+            self._catalog_reload_requested = False
 
         thread.started.connect(worker.run)
         worker.message.connect(self._on_download_message)
         worker.sol_started.connect(self._on_download_sol_started)
         worker.sol_catalogued.connect(self._on_download_sol_catalogued)
+        worker.catalog_progress.connect(self._on_catalog_progress)
         worker.sol_progress.connect(self._on_download_sol_progress)
         worker.file_started.connect(self._on_download_file_started)
         worker.file_progress.connect(self._on_download_file_progress)
@@ -1297,7 +1324,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         worker.sol_finished.connect(self._on_download_sol_finished)
         worker.failed.connect(self._on_download_failed)
         worker.finished.connect(self._on_downloader_finished)
-        worker.finished.connect(thread.quit)
+        worker.finished.connect(thread.quit, Qt.ConnectionType.DirectConnection)
         worker.finished.connect(worker.deleteLater)
         thread.finished.connect(self._on_download_thread_finished)
 
@@ -1322,6 +1349,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.act_download_stop.setEnabled(enabled)
 
     def _toggle_download_pause(self):
+        self._catalog_reload_requested = False
         if self._download_thread is not None and self._download_thread.isRunning():
             self._stop_downloader()
         elif self._download_paused or self._download_pending_resume:
@@ -1345,6 +1373,26 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
     def _on_download_message(self, message: str) -> None:
         self.download_status.setText(message)
         self._download_add_history(message)
+
+    def _on_catalog_progress(self, completed, total):
+        if self._closing:
+            return
+        self.download_sol_label.setText(f'Catálogo completo: {completed}/{total} SOLs')
+        self.download_sol_progress.setRange(0, max(1, total))
+        self.download_sol_progress.setValue(completed)
+        self.download_sol_progress.setFormat('Catálogo: %v/%m (%p%)')
+        self.download_file_label.setText('Conferindo catálogos antes de baixar imagens...')
+
+    def _clear_catalog_cache(self):
+        if self._closing:
+            return
+        self._catalog_reload_requested = True
+        if self._download_thread is not None and self._download_thread.isRunning():
+            self.download_status.setText('Parando a consulta atual para reler o catálogo completo...')
+            self._download_worker.stop()
+            self._download_thread.requestInterruption()
+        else:
+            self._launch_downloader(start_sol=0)
 
     def _collection_text(self, key):
         if getattr(self.source, "uses_sols", True):
@@ -1411,11 +1459,14 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
                 self.download_file_progress.setFormat("Arquivo: %p%")
 
     def _on_download_file_downloaded(self, sol: int, path_text: str) -> None:
-        path = Path(path_text)
-        if self._filters_active():
-            self._filter_timer.start(500)
+        if self._closing:
             return
+        path = Path(path_text)
         self._download_add_history(f"✓ {self._collection_text(sol)}: {path.name}")
+        if self._filters_active():
+            if self.filter_scope.currentIndex() == 1 or path.parent == self.current_folder:
+                self._filter_timer.start(500)
+            return
 
         # Se o usuário estiver olhando este SOL, a nova imagem aparece nas
         # thumbnails imediatamente, sem precisar apertar F5.
@@ -1441,6 +1492,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
                         self.thumb_list.blockSignals(False)
 
     def _on_download_sol_created(self, sol: int, folder_text: str) -> None:
+        if self._closing:
+            return
         self._download_add_history(f"＋ Criada pasta {Path(folder_text).name}")
         # Inserir sem reconstruir a lista: selecionar novamente o mesmo SOL
         # dispara _sol_changed e abre a primeira imagem, perdendo a visualização.
@@ -1457,6 +1510,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         item.setData(Qt.ItemDataRole.UserRole, (sol, str(folder)))
         item.setToolTip(str(folder))
         self.sol_list.insertItem(row, item)
+        self._update_sol_annotation_highlight(item)
         if self.current_sol is None:
             self.sol_list.setCurrentItem(item)
 
@@ -1519,6 +1573,10 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         old_thread = self._download_thread
         self._download_worker = None
         self._download_thread = None
+        if self._closing:
+            if old_thread is not None:
+                old_thread.deleteLater()
+            return
         self._sync_download_pause_button()
         self._source_actions.setEnabled(True)
         self.act_mission_settings.setEnabled(True)
@@ -1527,13 +1585,16 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         if old_thread is not None:
             old_thread.deleteLater()
 
-        if self._download_restart_pending:
+        if self._catalog_reload_requested:
+            self._launch_downloader(start_sol=0)
+        elif self._download_restart_pending:
             self._download_restart_pending = False
             QTimer.singleShot(100, self._start_downloader)
 
     # ---------- Folder/Sol/Image loading ----------
     def _update_source_controls(self) -> None:
         downloads = self.source.supports_downloads
+        self.act_clear_catalog_cache.setEnabled(downloads and getattr(self.source, 'uses_sols', True))
         self._sync_download_pause_button()
         if not downloads:
             self._download_pending_resume = False
@@ -1631,6 +1692,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             QMessageBox.warning(self, "Configuração não salva", "Não foi possível gravar as preferências. Verifique a permissão de escrita na pasta do aplicativo.")
 
     def _activate_mission(self, mission_id: str, folder: Path) -> None:
+        self._flush_inline_adjustments()
         previous = self._build_state()
         previous.pop("source_sessions", None)
         previous.pop("mission_config", None)
@@ -1638,6 +1700,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         target = dict(self._source_sessions.get(mission_id) or {})
         if target.get("root") and Path(target["root"]).resolve() != folder.resolve():
             target = {}
+        target["toolbar_layout"] = previous["toolbar_layout"]
         self._state_ready = False
         self.source = self.missions.source_for(mission_id)
         self.root = folder.resolve()
@@ -1696,6 +1759,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._activate_mission(self.source.id, Path(folder))
 
     def _load_sol_list(self) -> None:
+        self._cancel_sol_annotations()
         self._cancel_image_filters()
         self._filter_results = {}
         previous_folder = self.current_folder
@@ -1714,6 +1778,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             if previous_folder == folder:
                 selected_row = row
         self.sol_list.blockSignals(False)
+        self._queue_sol_annotations([str(folder) for _, folder in sol_folders])
 
         if not sol_folders:
             self.current_sol = None
@@ -1732,6 +1797,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self.sol_list.setCurrentRow(selected_row)
 
     def _sol_changed(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
+        self._flush_inline_adjustments()
         if current is None:
             return
         data = current.data(Qt.ItemDataRole.UserRole)
@@ -1806,6 +1872,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
                 self._thumb_timer.stop()
                 return
             item, path = self._thumb_queue.pop(0)
+            self._highlight_thumbnail(item, path)
             reader = QImageReader(str(path))
             reader.setAutoTransform(True)
             size = reader.size()
@@ -1833,6 +1900,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             self._save_state()
 
     def _load_image(self, path: Path, show_error: bool = True) -> bool:
+        self._flush_inline_adjustments()
         if self.current_path == path and self.original_image is not None:
             return True
         try:
@@ -1896,6 +1964,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             self.image_view.set_pixmap(QPixmap.fromImage(image), fit=fit)
 
     def _toggle_original(self):
+        self._flush_inline_adjustments()
         if self.original_image is None:
             self.act_original.setChecked(False)
             return
@@ -1949,6 +2018,7 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         self._commit_adjustments()
 
     def _reset_adjustments(self) -> None:
+        self._flush_inline_adjustments()
         if self.original_image is None:
             return
         self.contrast = 1.0
@@ -2031,6 +2101,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         def done(info: dict[str, Any]) -> None:
             if worker in self._metadata_workers:
                 self._metadata_workers.remove(worker)
+            if self._closing:
+                return
             self.statusBar().showMessage("Informações recebidas da NASA", 2500)
             dialog = ImageAboutDialog(info, self)
             dialog.exec()
@@ -2038,6 +2110,8 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
         def failed(message: str) -> None:
             if worker in self._metadata_workers:
                 self._metadata_workers.remove(worker)
+            if self._closing:
+                return
             self.statusBar().showMessage("Falha ao consultar a NASA", 2500)
             QMessageBox.warning(self, "About image", message)
 
@@ -2072,30 +2146,63 @@ class MainWindow(ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
             "Metadados e imagens: NASA Mars Exploration / Mars Science Laboratory.",
         )
 
-    def closeEvent(self, event) -> None:  # noqa: N802
-        if not self._confirm_annotation_close():
-            event.ignore()
-            return
-        self._cancel_image_filters()
-        self._closing = True
-        worker = self._download_worker
+    def _background_tasks_running(self):
         thread = self._download_thread
-        was_running = worker is not None and thread is not None and thread.isRunning()
+        return bool((thread is not None and thread.isRunning())
+                    or self.thread_pool.activeThreadCount()
+                    or self._filter_pool.activeThreadCount())
 
-        # Save BEFORE stopping so current SOL/file/mode are never lost.
-        self._save_state(pending_resume=bool(was_running or self._download_pending_resume))
+    def _finish_shutdown(self):
+        if self._background_tasks_running():
+            return
+        self._shutdown_timer.stop()
+        self._metadata_workers.clear()
+        self._filter_jobs.clear()
+        self._sol_summary_jobs.clear()
+        session = getattr(self.metadata_client, "session", None)
+        if session is not None:
+            session.close()
+        self.close()
 
-        if was_running:
-            worker.stop()
-            thread.requestInterruption()
-            # Normally returns quickly. The .part is deliberately kept for resume.
-            if not thread.wait(3000):
-                thread.terminate()
-                thread.wait(1000)
-
-        # Save once more after the worker has stopped. If it was downloading, keep
-        # pending_resume=True so the next launch automatically continues.
-        self._save_state(pending_resume=bool(was_running or self._download_pending_resume))
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if not self._closing:
+            self._flush_inline_adjustments()
+            if not self._confirm_annotation_close():
+                event.ignore()
+                return
+            self._closing = True
+            worker, thread = self._download_worker, self._download_thread
+            running = thread is not None and thread.isRunning()
+            self._shutdown_pending_resume = bool(running or self._download_pending_resume)
+            self._save_state(pending_resume=self._shutdown_pending_resume)
+            # Discard queued work before cancellation lets running jobs finish
+            # and immediately pick up another queued task.
+            self.thread_pool.clear()
+            self._filter_pool.clear()
+            self._cancel_image_filters()
+            self._cancel_sol_annotations()
+            self._thumb_timer.stop()
+            self._thumb_resize_timer.stop()
+            self._inline_timer.stop()
+            self._thumb_queue.clear()
+            self._download_restart_pending = False
+            for metadata in self._metadata_workers:
+                metadata.cancel.set()
+                session = getattr(metadata.client, 'session', None)
+                if hasattr(session, 'cancel'):
+                    session.cancel()
+            if worker is not None:
+                worker.stop()
+            if running:
+                thread.requestInterruption()
+                thread.quit()
+        if self._background_tasks_running():
+            event.ignore()
+            self.statusBar().showMessage("Encerrando tarefas em segundo plano?")
+            self.setEnabled(False)
+            self._shutdown_timer.start()
+            return
+        self._shutdown_timer.stop()
         super().closeEvent(event)
 
 

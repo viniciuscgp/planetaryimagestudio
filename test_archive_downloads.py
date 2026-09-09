@@ -2,11 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from PIL import Image
 from sources.archives import (ArchiveWorker, ArchiveSource, ArchiveProvider, HiriseProvider, LrocProvider,
                               EsaHrscProvider, KaguyaProvider, collection_id, links, STATE_FILE)
-from sources.perseverance import PerseveranceWorker
+from sources.perseverance import PerseveranceWorker, PerseveranceMetadata
 from missions import MissionRegistry
 import test_download_navigation as navigation
 
@@ -100,6 +100,53 @@ class ArchiveTests(unittest.TestCase):
         items=[{'sol':5,'image_files':{'full_res':f'https://example.org/{i}.png'}} for i in range(100)]
         with patch.object(w,'query',return_value={'images':items,'total_results':300}):
             with self.assertRaises(RuntimeError):w._sol_items(5)
+
+    def test_perseverance_empty_sol_continues_to_next_sol(self):
+        w=PerseveranceWorker(self.root, start_sol=5)
+        response=MagicMock()
+        response.__enter__.return_value=response
+        response.json.side_effect=[
+            {'images':[], 'total_results':0},
+            {'images':[], 'total_results':0},
+            {'images':[{'sol':7,'image_files':{'full_res':'https://example.org/seven.png'}}], 'total_results':1},
+        ]
+        errors=[]; completed=[]
+        w.failed.connect(errors.append)
+        w.sol_finished.connect(lambda sol,*args: completed.append(sol))
+        with patch.object(w,'_latest_nasa_sol',return_value=7), \
+             patch.object(w,'_prepare_catalog'), \
+             patch.object(w.session,'get',return_value=response) as get, \
+             patch.object(w,'_download_file',side_effect=self.download) as download:
+            w.run()
+        self.assertFalse(errors)
+        self.assertEqual(completed,[5,6,7])
+        self.assertEqual(download.call_count,1)
+        for sol,call in zip((5,6,7),get.call_args_list):
+            params=call.kwargs['params']
+            self.assertEqual(params['ver'],'1.2')
+            self.assertEqual(params['condition_1'],'mars2020:mission')
+            self.assertEqual(params['condition_2'],f'{sol}:sol:gte')
+            self.assertEqual(params['condition_3'],f'{sol}:sol:lte')
+            self.assertNotIn('sol',params)
+
+    def test_perseverance_reads_all_pages(self):
+        w=PerseveranceWorker(self.root);self.addCleanup(w.session.close)
+        items=[{'sol':7,'image_files':{'full_res':f'https://example.org/{i}.png'}} for i in range(125)]
+        with patch.object(w,'query',side_effect=[{'images':items[:100],'total_results':125},
+                                               {'images':items[100:],'total_results':125}]) as query:
+            self.assertEqual(w._sol_items(7),items)
+        self.assertEqual([c.kwargs['page'] for c in query.call_args_list],[0,1])
+
+    def test_perseverance_metadata_searches_later_pages(self):
+        client=PerseveranceMetadata();self.addCleanup(client.session.close)
+        items=[{'sol':7,'image_files':{'full_res':f'https://example.org/{i}.png'}} for i in range(101)]
+        response=MagicMock();response.__enter__.return_value=response
+        response.json.side_effect=[{'images':items[:100],'total_results':101},
+                                   {'images':items[100:],'total_results':101}]
+        with patch.object(client.session,'get',return_value=response), \
+             patch.object(client,'_normalize',return_value={'found':True}) as normalize:
+            self.assertEqual(client.lookup('100.png',7),{'found':True})
+        normalize.assert_called_once_with(items[-1],'100.png',7)
 
     def test_hirise_parser_uses_archive_jpg_and_next_cursor(self):
         w=self.worker();p=HiriseProvider(w)

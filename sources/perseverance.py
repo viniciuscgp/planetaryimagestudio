@@ -3,13 +3,21 @@ from pathlib import Path
 from .curiosity import CuriositySource, DownloaderWorker, MetadataClient
 
 API = 'https://mars.nasa.gov/rss/api/'
-PARAMS = dict(feed='raw_images', category='mars2020', feedtype='json')
+PARAMS = dict(feed='raw_images', category='mars2020,ingenuity', feedtype='json',
+              ver='1.2', condition_1='mars2020:mission', order='sol desc')
+
+
+def sol_filter(sol):
+    # The legacy `sol` endpoint falls back to the latest images for empty SOLs.
+    # Use the same explicit range and API version as NASA's raw-image gallery.
+    return dict(condition_2=f'{sol}:sol:gte', condition_3=f'{sol}:sol:lte')
 
 class PerseveranceWorker(DownloaderWorker):
+    catalog_id = 'perseverance'
     def query(self, **params):
         if self._stopped():
             raise InterruptedError()
-        with self.session.get(API, params={**PARAMS, **params}, timeout=(15, 45)) as response:
+        with self._request_session().get(API, params={**PARAMS, **params}, timeout=(15, 45)) as response:
             response.raise_for_status()
             data = response.json()
         if not isinstance(data, dict) or not isinstance(data.get('images'), list):
@@ -29,7 +37,7 @@ class PerseveranceWorker(DownloaderWorker):
     def _sol_items(self, sol):
         result, seen, page = [], set(), 0
         while not self._stopped():
-            data = self.query(sol=sol, num=100, page=page)
+            data = self.query(**sol_filter(sol), num=100, page=page)
             items = data['images']
             if not items:
                 break
@@ -60,14 +68,27 @@ class PerseveranceMetadata(MetadataClient):
         key = (filename, sol)
         if key in self._cache:
             return self._cache[key]
-        with self.session.get(API, params={**PARAMS, 'sol':sol, 'num':100, 'page':0}, timeout=20) as response:
-            response.raise_for_status()
-            items=response.json().get('images', [])
-        for item in items:
-            if self._remote_filename({'full_res':item.get('image_files', {}).get('full_res')}) == filename:
-                result=self._normalize(item, filename, sol)
-                self._cache[key]=result
-                return result
+        page = 0
+        seen_pages = set()
+        while True:
+            with self.session.get(API, params={**PARAMS, **sol_filter(sol), 'num':100, 'page':page}, timeout=20) as response:
+                response.raise_for_status()
+                data = response.json()
+                items = data.get('images', [])
+            signature = tuple(item.get('image_files', {}).get('full_res') for item in items)
+            if not items or signature in seen_pages:
+                break
+            seen_pages.add(signature)
+            for item in items:
+                if int(item.get('sol', -1)) != sol:
+                    raise RuntimeError('O servidor ignorou o filtro de SOL do Perseverance.')
+                if self._remote_filename({'full_res':item.get('image_files', {}).get('full_res')}) == filename:
+                    result=self._normalize(item, filename, sol)
+                    self._cache[key]=result
+                    return result
+            if len(items) < 100 or (page + 1) * 100 >= int(data.get('total_results', 2**31)):
+                break
+            page += 1
         return {'filename':filename, 'sol':sol, 'title':'Perseverance', 'nasa_url':'https://mars.nasa.gov/mars2020/multimedia/raw-images/'}
 
 class PerseveranceSource(CuriositySource):

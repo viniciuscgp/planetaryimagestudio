@@ -45,11 +45,11 @@ def validate_state(state):
     if not isinstance(state["drawings"], list):
         raise ValueError("Lista de desenhos inválida")
     for drawing in state["drawings"]:
-        if drawing["kind"] not in ("pencil", "circle", "text") or not QColor(drawing["color"]).isValid():
+        if drawing["kind"] not in ("pencil", "circle", "ellipse", "rectangle", "text") or not QColor(drawing["color"]).isValid():
             raise ValueError("Desenho inválido")
         number(drawing["width"], 1, 200)
         points = drawing["points"]
-        if not isinstance(points, list) or not points or (drawing["kind"] == "circle" and len(points) != 2):
+        if not isinstance(points, list) or not points or (drawing["kind"] in ("circle", "ellipse", "rectangle") and len(points) != 2):
             raise ValueError("Pontos inválidos")
         for x, y in points:
             number(x, -1e7, 1e7)
@@ -132,6 +132,12 @@ def composite_image(base, drawings, rotation):
         elif drawing["kind"] == "circle":
             radius = math.hypot(points[1].x() - points[0].x(), points[1].y() - points[0].y())
             painter.drawEllipse(points[0], radius, radius)
+        elif drawing["kind"] in ("ellipse", "rectangle"):
+            rect = QRectF(points[0], points[1]).normalized()
+            if drawing["kind"] == "ellipse":
+                painter.drawEllipse(rect)
+            else:
+                painter.drawRect(rect)
         else:
             painter.save()
             painter.translate(points[0])
@@ -162,7 +168,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         toolbar.setObjectName("drawing_toolbar")
         self.addToolBar(toolbar)
         self._drawing_tools = QActionGroup(self)
-        for label, tool in (("Hand (Navegar)", "pan"), ("Lápis", "pencil"), ("Círculo", "circle"), ("Texto", "text")):
+        for label, tool in (("Hand (Navegar)", "pan"), ("Lápis", "pencil"), ("Oval", "ellipse"), ("Retângulo", "rectangle"), ("Texto", "text")):
             action = QAction(label, self)
             action.setCheckable(True)
             action.setData(tool)
@@ -171,7 +177,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
             if tool == "pan":
                 action.setChecked(True)
         self._drawing_tools.triggered.connect(self._drawing_tool_changed)
-        toolbar.setToolTip("Lápis: arraste para desenhar. Círculo: arraste do centro à borda. Texto: clique para inserir. Navegar: arraste para mover a imagem.")
+        toolbar.setToolTip("Lápis: arraste para desenhar. Oval e retângulo: arraste de um canto ao canto oposto. Texto: clique para inserir. Navegar: arraste para mover a imagem.")
         toolbar.addSeparator()
         toolbar.addWidget(QLabel("Traço (px): "))
         self.stroke_width = QSpinBox()
@@ -335,6 +341,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self._sync_annotation_controls()
 
     def _sync_annotation_controls(self):
+        self._sync_inline_adjustments()
         document = self._annotation_document
         self.act_smooth.setEnabled(document is not None)
         for action in (self.act_levels, self.act_sharpen, self.act_original, self.act_brightness):
@@ -368,6 +375,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
                 self._annotation_error = str(exc)
                 QMessageBox.warning(self, "Não foi possível salvar anotações", str(exc))
         self._sync_annotation_controls()
+        self._refresh_sol_annotation_highlight()
         self._refresh_filters_after_edit()
 
     def _save_pen_settings(self):
@@ -393,6 +401,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self._persist_annotations()
 
     def _undo_annotation(self, redo=False):
+        self._flush_inline_adjustments()
         if self._annotation_document is None or self.original_image is None:
             return
         self._draft_drawing = None
@@ -449,7 +458,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
             pen = self._annotation_document.pen
             tool = self.image_view.drawing_tool
             self._draft_drawing = {"kind": tool, "color": pen["color"], "width": pen["width"], "points": [xy]}
-            if tool == "circle":
+            if tool in ("circle", "ellipse", "rectangle"):
                 self._draft_drawing["points"].append(xy)
             if tool == "text":
                 text, accepted = QInputDialog.getText(self, "Texto na imagem", "Texto:")
@@ -460,7 +469,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
                 self._finish_drawing()
                 return
         elif self._draft_drawing:
-            if self._draft_drawing["kind"] == "circle":
+            if self._draft_drawing["kind"] in ("circle", "ellipse", "rectangle"):
                 self._draft_drawing["points"][1] = xy
             elif self._draft_drawing["points"][-1] != xy:
                 self._draft_drawing["points"].append(xy)

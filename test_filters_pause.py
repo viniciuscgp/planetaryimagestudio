@@ -84,6 +84,40 @@ class FilterPauseTests(unittest.TestCase):
         window._image_filter_done(stale,[(1,self.root/'SOL1',self.root/'SOL1'/'old.png')])
         self.assertIsNone(window.current_path)
 
+    def test_other_sol_download_does_not_refresh_folder_filter(self):
+        self.image(10,'working.png')
+        window=self.window()
+        window.filter_color.setChecked(True);self.wait_filters(window)
+        selected=window.thumb_list.currentItem()
+        window.image_view.scale(2,2)
+        transform=window.image_view.transform()
+        with patch.object(window._filter_timer,'start') as schedule, \
+             patch.object(window.thumb_list,'doItemsLayout') as layout:
+            for i in range(3):
+                path=self.image(9,f'download{i}.png')
+                window._on_download_file_downloaded(9,str(path))
+            schedule.assert_not_called();layout.assert_not_called()
+        self.assertIs(window.thumb_list.currentItem(),selected)
+        self.assertEqual(window.image_view.transform(),transform)
+        path=self.image(10,'new.png')
+        with patch.object(window._filter_timer,'start') as schedule:
+            window._on_download_file_downloaded(10,str(path))
+            schedule.assert_called_once_with(500)
+        window._request_image_filter(background=True);self.wait_filters(window)
+        self.assertIn(path,window.current_images)
+        self.assertIs(window.thumb_list.currentItem(),selected)
+
+    def test_background_filter_without_new_images_does_not_relayout(self):
+        self.image(10,'working.png');window=self.window()
+        window.filter_color.setChecked(True);self.wait_filters(window)
+        count=window.filter_count.text()
+        with patch.object(window.thumb_list,'doItemsLayout') as layout, \
+             patch.object(window.filter_count,'setText') as label:
+            window._request_image_filter(background=True)
+            self.wait_filters(window)
+            layout.assert_not_called();label.assert_not_called()
+        self.assertEqual(window.filter_count.text(),count)
+
     def test_stop_becomes_continue_and_keeps_requested_start_mode(self):
         self.image(10,'test.png');window=self.window()
         thread=Mock();thread.isRunning.return_value=True

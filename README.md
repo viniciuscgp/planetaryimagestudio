@@ -114,7 +114,8 @@ Na barra **Seleção e recorte**, escolha **Selecionar área** e arraste um ret�
 
 - **Hand (Navegar):** arraste com o botão esquerdo para mover a imagem. A **roda do mouse sobre a imagem** controla o zoom em qualquer ferramenta, sem precisar de Ctrl.
 - **Lápis:** arraste para desenhar livremente; um clique marca um ponto.
-- **Círculo:** arraste do centro até a borda para definir o raio.
+- **Oval:** arraste de um canto ao canto oposto para definir a largura e a altura.
+- **Retângulo:** arraste de um canto ao canto oposto para marcar uma área retangular.
 - **Traço (px):** espessura do lápis e do contorno do círculo, inicialmente 3 pixels. A medida usa pixels da imagem, independentemente do zoom.
 - **Cor:** define a cor dos próximos traços, círculos e textos. Cada marcação mantém sua própria cor e espessura.
 - **Texto:** clique na imagem e digite o texto. **Texto (px)** controla o tamanho da fonte.
@@ -202,7 +203,9 @@ Pastas personalizadas e os demais ajustes ficam em "Mostrar opções avançadas"
 
 Os JPEGs HiRISE e Kaguya são produtos de visualização. O app não baixa nem converte os JP2/IMG/FITS científicos desses instrumentos. HRSC usa a galeria publicada, e não todo o acervo científico ESA. TIFFs LROC podem ser muito grandes: a amostra validada tem 2.532 × 52.224 pixels; a visualização depende dos limites de memória e decodificação do computador.
 
-Selecione a missão de trabalho e habilite **Atualizar automaticamente ao abrir esta missão**. Cada missão usa sua pasta na base já configurada. Os novos downloads ficam desativados até você habilitá-los. Curiosity e Perseverance começam pelo último SOL local, ou pelo mais recente disponível quando a pasta está vazia; o botão de SOL inicial permite buscar o histórico.
+Selecione a missão de trabalho e habilite **Atualizar automaticamente ao abrir esta missão**. Cada missão usa sua pasta na base já configurada. Os novos downloads ficam desativados até você habilitá-los. Curiosity e Perseverance conferem primeiro o catálogo completo, do SOL 0 ao mais recente, com cache em disco por missão e por SOL. A atualização normal verifica também lacunas nas pastas locais; o botão de SOL inicial permite limitar os downloads a partir de um SOL escolhido.
+
+Catálogos históricos são reutilizados por até 7 dias e os dos últimos 8 SOLs por até 5 minutos. Se a leitura for interrompida, os SOLs já consultados são aproveitados na retomada. No menu **Downloader > Limpar cache de catálogos e reler tudo**, você pode forçar uma nova consulta completa sem apagar imagens ou marcações.
 
 Nas quatro fontes de acervo, cada atualização baixa até **10 observações**, com todos os arquivos selecionados dessas observações. **Baixar próximo lote** continua o catálogo de onde parou, inclusive após reabrir. **Reverificar início do catálogo** volta ao começo sem apagar imagens; use-o para conferir publicações recentes. Isso não é uma sincronização integral em segundo plano de todo o arquivo. LROC percorre fases recentes primeiro, mantendo a ordem de observações fornecida pelo catálogo; os demais começam pelas páginas ou meses mais recentes.
 

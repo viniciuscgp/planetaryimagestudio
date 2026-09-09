@@ -40,7 +40,18 @@ class DownloadNavigationTests(unittest.TestCase):
 
     def window(self):
         window = MainWindow(self.root, initial_state={"download": {}})
-        self.addCleanup(window.close)
+        def close_window():
+            # Complete asynchronous shutdown before restoring mocks and deleting
+            # the temporary image directory. No callbacks may leak to another test.
+            import time
+            window.close()
+            deadline = time.monotonic() + 3
+            while window._background_tasks_running() and time.monotonic() < deadline:
+                self.app.processEvents()
+                time.sleep(.005)
+            self.app.processEvents()
+            window.close()
+        self.addCleanup(close_window)
         return window
 
     def test_new_sols_and_downloads_preserve_view(self):

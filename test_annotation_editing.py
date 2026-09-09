@@ -12,6 +12,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from image_annotations import AnnotationDocument
+from annotation_editing import drawing_shape
 
 
 class EditingTests(unittest.TestCase):
@@ -33,6 +34,32 @@ class EditingTests(unittest.TestCase):
         window._drawing_event("press", start)
         window._drawing_event("move", end)
         window._drawing_event("release", end)
+
+    def test_oval_and_rectangle_use_opposite_corners_in_both_directions(self):
+        path, window = self.prepare()
+        for kind in ('ellipse', 'rectangle'):
+            for start, end in (((100, 100), (240, 160)), ((240, 160), (100, 100))):
+                self.draw(window, kind, start, end)
+                drawing = window._annotation_document.state['drawings'][-1]
+                self.assertEqual(drawing['kind'], kind)
+                bounds = drawing_shape(drawing).boundingRect()
+                self.assertEqual((bounds.x(), bounds.y(), bounds.width(), bounds.height()), (100, 100, 140, 60))
+                self.assertEqual(AnnotationDocument(path).state['drawings'][-1], drawing)
+                window._undo_annotation()
+                window._undo_annotation(redo=True)
+                self.assertEqual(window._annotation_document.state['drawings'][-1], drawing)
+
+    def test_new_shapes_resize_width_and_height_independently(self):
+        path, window = self.prepare()
+        for kind in ('ellipse', 'rectangle'):
+            self.draw(window, kind, (100, 100), (200, 150))
+            self.tool(window, 'select')
+            self.drag(window, QPointF(150, 125), QPointF(150, 125))
+            self.drag(window, QPointF(200, 150), QPointF(250, 170))
+            drawing = window._annotation_document.state['drawings'][-1]
+            bounds = drawing_shape(drawing).boundingRect()
+            self.assertAlmostEqual(bounds.width(), 150)
+            self.assertAlmostEqual(bounds.height(), 70)
 
     def test_circle_move_resize_persistence_and_undo(self):
         path, window = self.prepare()

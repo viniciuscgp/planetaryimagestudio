@@ -19,6 +19,12 @@ def drawing_shape(drawing):
     if drawing["kind"] == "circle":
         radius = math.hypot(points[1].x() - points[0].x(), points[1].y() - points[0].y())
         path.addEllipse(points[0], max(radius, 0.5), max(radius, 0.5))
+    elif drawing["kind"] in ("ellipse", "rectangle"):
+        rect = QRectF(points[0], points[1]).normalized()
+        if drawing["kind"] == "ellipse":
+            path.addEllipse(rect)
+        else:
+            path.addRect(rect)
     elif drawing["kind"] == "text":
         font = QFont(drawing["font_family"])
         font.setPixelSize(int(drawing["font_size"]))

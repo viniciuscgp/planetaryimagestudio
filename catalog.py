@@ -9,12 +9,14 @@ def natural_key(value: str) -> list[Any]:
     return [int(x) if x.isdigit() else x.lower() for x in re.split(r"(\d+)", value)]
 
 
-def list_images(folder: Path) -> list[Path]:
+def list_images(folder: Path, cancel=None) -> list[Path]:
     try:
-        files = [
-            p for p in folder.iterdir()
-            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS
-        ]
+        files = []
+        for p in folder.iterdir():
+            if cancel is not None and cancel.is_set():
+                return []
+            if p.suffix.lower() in SUPPORTED_EXTENSIONS and p.is_file():
+                files.append(p)
     except OSError:
         return []
     return sorted(files, key=lambda p: natural_key(p.name))
