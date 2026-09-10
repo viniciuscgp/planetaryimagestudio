@@ -7,7 +7,7 @@ from unittest.mock import patch
 import test_image_annotations as annotations
 from PIL import Image
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QImage
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -26,6 +26,46 @@ class EditingTests(unittest.TestCase):
         path = self.image(10, "first.png")
         Image.new("RGB", (600, 400), "gray").save(path)
         return path, self.window()
+
+    def test_selected_style_updates_persist_and_undo_without_changing_other_objects(self):
+        path, window = self.prepare()
+        self.draw(window, 'ellipse', (100, 100), (200, 160))
+        self.draw(window, 'rectangle', (300, 100), (400, 160))
+        untouched = copy.deepcopy(window._annotation_document.state['drawings'][1])
+        pen = dict(window._annotation_document.pen)
+        self.tool(window, 'select')
+        self.drag(window, QPointF(150, 130), QPointF(150, 130))
+        before = window.processed_qimage.copy()
+        window.stroke_width.setValue(12)
+        with patch('image_annotations.QColorDialog.getColor', return_value=QColor('#00ff00')):
+            window._choose_stroke_color()
+        drawings = AnnotationDocument(path).state['drawings']
+        self.assertEqual(drawings[0]['width'], 12)
+        self.assertEqual(drawings[0]['color'], '#00ff00')
+        self.assertEqual(drawings[0]['points'], [[100, 100], [200, 160]])
+        self.assertEqual(drawings[1], untouched)
+        self.assertEqual(window._annotation_document.pen, pen)
+        self.assertNotEqual(window.processed_qimage, before)
+        window._undo_annotation()
+        self.assertEqual(window._annotation_document.state['drawings'][0]['color'], pen['color'])
+        window._undo_annotation(redo=True)
+        self.assertEqual(window._annotation_document.state['drawings'][0]['color'], '#00ff00')
+        self.tool(window, 'select')
+        self.drag(window, QPointF(150, 130), QPointF(150, 130))
+        self.assertEqual(window.stroke_width.value(), 12)
+        self.drag(window, QPointF(350, 130), QPointF(350, 130))
+        self.assertEqual(window.stroke_width.value(), untouched['width'])
+
+    def test_selected_text_size_updates(self):
+        path, window = self.prepare()
+        with patch('image_annotations.QInputDialog.getText', return_value=('Alvo', True)):
+            self.draw(window, 'text', (100, 100))
+        window._selected_drawing = 0
+        window._update_annotation_handles()
+        window.text_size.setValue(48)
+        self.assertEqual(AnnotationDocument(path).state['drawings'][0]['font_size'], 48)
+        window._undo_annotation()
+        self.assertEqual(window._annotation_document.state['drawings'][0]['font_size'], 24)
 
     def tool(self, window, tool):
         next(action for action in window._drawing_tools.actions() if action.data() == tool).trigger()

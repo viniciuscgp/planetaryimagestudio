@@ -198,8 +198,8 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.text_size.setRange(6, 400)
         self.text_size.setValue(24)
         toolbar.addWidget(self.text_size)
-        self.stroke_width.valueChanged.connect(self._save_pen_settings)
-        self.text_size.valueChanged.connect(self._save_pen_settings)
+        self.stroke_width.valueChanged.connect(lambda value: self._set_pen_property("width", value))
+        self.text_size.valueChanged.connect(lambda value: self._set_pen_property("font_size", value))
         toolbar.addSeparator()
         self.act_undo_annotation = self._make_action("Desfazer", lambda: self._undo_annotation(), "Ctrl+Z")
         self.act_redo_annotation = self._make_action("Refazer", lambda: self._undo_annotation(redo=True), "Ctrl+Shift+Z")
@@ -357,7 +357,16 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.act_invert.setChecked(bool(document and document.state["inverted"]))
         self.act_undo_annotation.setEnabled(bool(document and document.undo))
         self.act_redo_annotation.setEnabled(bool(document and document.redo))
-        pen = document.pen if document else {"color": "#ff0000", "width": 3, "font_size": 24}
+        self._sync_pen_controls()
+
+    def _sync_pen_controls(self):
+        if not hasattr(self, "text_size"):
+            return
+        document = self._annotation_document
+        pen = dict(document.pen) if document else {"color": "#ff0000", "width": 3, "font_size": 24}
+        selected = self._selected_annotation()
+        if selected is not None:
+            pen.update({key: selected[key] for key in ("color", "width", "font_size") if key in selected})
         for spin, key in ((self.stroke_width, "width"), (self.text_size, "font_size")):
             spin.blockSignals(True)
             spin.setValue(int(pen[key]))
@@ -386,19 +395,28 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self._refresh_sol_annotation_highlight()
         self._refresh_filters_after_edit()
 
-    def _save_pen_settings(self):
+    def _set_pen_property(self, key, value):
         if self._annotation_document is None or self.original_image is None:
             return
-        self._annotation_document.pen.update(width=self.stroke_width.value(), font_size=self.text_size.value())
+        selected = self._selected_annotation()
+        if selected is None:
+            self._annotation_document.pen[key] = value
+        elif key != "font_size" or selected["kind"] == "text":
+            state = copy.deepcopy(self._annotation_document.state)
+            state["drawings"][self._selected_drawing][key] = value
+            self._annotation_document.commit(state)
+            self._edit_original = self._edit_preview = None
+            self.act_original.setChecked(False)
+            self._show_annotations()
         self._persist_annotations()
 
     def _choose_stroke_color(self):
         if self._annotation_document is None or self.original_image is None:
             return
-        color = QColorDialog.getColor(QColor(self._annotation_document.pen["color"]), self, "Cor do traço e texto")
+        selected = self._selected_annotation()
+        color = QColorDialog.getColor(QColor((selected or self._annotation_document.pen)["color"]), self, "Cor do traço e texto")
         if color.isValid():
-            self._annotation_document.pen["color"] = color.name()
-            self._persist_annotations()
+            self._set_pen_property("color", color.name())
 
     def _commit_adjustments(self):
         if self._annotation_document is None:

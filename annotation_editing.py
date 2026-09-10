@@ -63,6 +63,7 @@ class AnnotationEditingMixin:
 
     def _sync_edit_actions(self):
         selected = self._selected_annotation()
+        self._sync_pen_controls()
         if hasattr(self, "act_delete_annotation"):
             self.act_delete_annotation.setEnabled(selected is not None)
             self.act_edit_annotation_text.setEnabled(bool(selected and selected["kind"] == "text"))

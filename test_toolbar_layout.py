@@ -12,6 +12,30 @@ class ToolbarLayoutTests(unittest.TestCase):
     image = navigation.DownloadNavigationTests.image
     window = navigation.DownloadNavigationTests.window
 
+    def test_auto_zoom_preserves_panned_position_when_navigating_back_and_forth(self):
+        from PIL import Image
+        for name in ('a.png', 'b.png'):
+            Image.new('RGB', (2400, 1800), 'gray').save(self.image(10, name))
+        window = self.window()
+        window.show()
+        self.app.processEvents()
+        view = window.image_view
+        view.actual_size()
+        view.scale(2, 2)
+        self.app.processEvents()
+        view.horizontalScrollBar().setValue(725)
+        view.verticalScrollBar().setValue(530)
+        position = (view.horizontalScrollBar().value(), view.verticalScrollBar().value())
+        center = view.mapToScene(view.viewport().rect().center())
+        transform = view.transform()
+        window.act_auto_zoom.setChecked(True)
+        for row in (1, 0, 1, 0):
+            window.thumb_list.setCurrentRow(row)
+            self.app.processEvents()
+            self.assertEqual(view.transform(), transform)
+            self.assertEqual((view.horizontalScrollBar().value(), view.verticalScrollBar().value()), position)
+            self.assertEqual(view.mapToScene(view.viewport().rect().center()), center)
+
     def test_auto_zoom_preserves_scale_between_different_image_sizes(self):
         from PIL import Image
         self.image(10, 'a.png')

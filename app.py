@@ -847,7 +847,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.act_auto_zoom = self._make_action("Auto Zoom", self._save_auto_zoom)
         self.act_auto_zoom.setCheckable(True)
         self.act_auto_zoom.setChecked(bool(self._state.get("auto_zoom", False)))
-        self.act_auto_zoom.setToolTip("Manter o mesmo nível de zoom ao trocar de imagem")
+        self.act_auto_zoom.setToolTip("Manter o zoom e a posição da área visualizada ao trocar de imagem")
 
         self.act_brightness = self._make_action("Brilho…", lambda: self._focus_inline_adjustment("brightness"))
         self.act_levels = self._make_action("Níveis…", lambda: self._focus_inline_adjustment("gamma"))
@@ -874,6 +874,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
 
         self.act_prev = self._make_action("Imagem anterior", self._previous_image, "Left")
         self.act_next = self._make_action("Próxima imagem", self._next_image, "Right")
+        self.act_prev.setShortcuts([QKeySequence("B"), QKeySequence("Left")])
+        self.act_next.setShortcuts([QKeySequence("N"), QKeySequence("Right")])
 
         self.act_download_now = self._make_action("Atualizar imagens da NASA", self._start_downloader)
         self.act_download_from = self._make_action(
@@ -1954,8 +1956,6 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self._last_viewed = (self.current_sol, self.current_folder, path)
         self._load_annotations(path)
         self._render_current(fit=not keep_zoom)
-        if keep_zoom:
-            self.image_view.centerOn(self.image_view.sceneRect().center())
         return True
 
     def _render_current(self, fit: bool = False) -> None:
