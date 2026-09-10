@@ -12,6 +12,29 @@ class ToolbarLayoutTests(unittest.TestCase):
     image = navigation.DownloadNavigationTests.image
     window = navigation.DownloadNavigationTests.window
 
+    def test_auto_zoom_preserves_scale_between_different_image_sizes(self):
+        from PIL import Image
+        self.image(10, 'a.png')
+        second = self.image(10, 'b.png')
+        Image.new('RGB', (320, 200), 'blue').save(second)
+        window = self.window()
+        window.image_view.actual_size()
+        window.image_view.scale(2.4, 2.4)
+        window.act_auto_zoom.setChecked(True)
+        window.thumb_list.setCurrentRow(1)
+        self.app.processEvents()
+        self.assertAlmostEqual(window.image_view.transform().m11(), 2.4)
+        self.assertAlmostEqual(window.image_view.transform().m22(), 2.4)
+        self.assertFalse(window.image_view._fit_mode)
+        self.assertTrue(window._build_state()['auto_zoom'])
+        reopened = MainWindow(self.root, window._build_state())
+        self.addCleanup(reopened.close)
+        self.assertTrue(reopened.act_auto_zoom.isChecked())
+        self.assertTrue(reopened.image_view._fit_mode)
+        window.act_auto_zoom.setChecked(False)
+        window.thumb_list.setCurrentRow(0)
+        self.assertTrue(window.image_view._fit_mode)
+
     def test_shortcuts_steps_and_icon_preference(self):
         self.image(10, 'first.png')
         window = self.window()

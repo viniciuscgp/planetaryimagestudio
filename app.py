@@ -319,7 +319,7 @@ class ImageView(QGraphicsView):
             return
 
         if fit:
-            QTimer.singleShot(0, self.fit_image)
+            QTimer.singleShot(0, lambda: self.fit_image() if self._fit_mode else None)
         else:
             # Restore exact scroll positions. Repeated centerOn(mapToScene(...))
             # rounds the viewport center and shifts the image on each drawing update.
@@ -844,6 +844,10 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
 
         self.act_fit = self._make_action("Ajustar à janela", self.image_view.fit_image, "F")
         self.act_actual = self._make_action("Tamanho real (1:1)", self.image_view.actual_size, "1")
+        self.act_auto_zoom = self._make_action("Auto Zoom", self._save_auto_zoom)
+        self.act_auto_zoom.setCheckable(True)
+        self.act_auto_zoom.setChecked(bool(self._state.get("auto_zoom", False)))
+        self.act_auto_zoom.setToolTip("Manter o mesmo nível de zoom ao trocar de imagem")
 
         self.act_brightness = self._make_action("Brilho…", lambda: self._focus_inline_adjustment("brightness"))
         self.act_levels = self._make_action("Níveis…", lambda: self._focus_inline_adjustment("gamma"))
@@ -900,6 +904,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         menu_view = self.menuBar().addMenu("Visualizar")
         menu_view.addAction(self.act_fit)
         menu_view.addAction(self.act_actual)
+        menu_view.addAction(self.act_auto_zoom)
         menu_view.addSeparator()
         menu_view.addAction(self.act_prev)
         menu_view.addAction(self.act_next)
@@ -963,6 +968,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         toolbar.addSeparator()
         toolbar.addAction(self.act_fit)
         toolbar.addAction(self.act_actual)
+        toolbar.addAction(self.act_auto_zoom)
         toolbar.addAction(self.act_original)
         toolbar.addSeparator()
         toolbar.addAction(self.act_rotate_left)
@@ -1058,6 +1064,10 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             return
         self.missions.profiles[self.source.id]["start_sol"] = int(value)
         self._save_state()
+
+    def _save_auto_zoom(self) -> None:
+        if getattr(self, "_state_ready", False):
+            self._save_state()
 
     def _restore_saved_ui_state(self) -> None:
         layout = self._state.get("toolbar_layout")
@@ -1173,6 +1183,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             "window_maximized": bool(self.isMaximized()),
             "toolbar_layout": bytes(self.saveState(1)).hex(),
             "toolbar_text": self.act_toolbar_text.isChecked(),
+            "auto_zoom": self.act_auto_zoom.isChecked(),
             "splitter_sizes": [int(v) for v in sizes],
             "thumbnail_panel_height": self._thumb_panel_height,
             "download_panel_open": bool(self._download_panel_open),
@@ -1719,6 +1730,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             target = {}
         target["toolbar_layout"] = previous["toolbar_layout"]
         target["toolbar_text"] = previous["toolbar_text"]
+        target["auto_zoom"] = previous["auto_zoom"]
         self._state_ready = False
         self.source = self.missions.source_for(mission_id)
         self.root = folder.resolve()
@@ -1919,6 +1931,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
 
     def _load_image(self, path: Path, show_error: bool = True) -> bool:
         self._flush_inline_adjustments()
+        keep_zoom = (getattr(self, "_state_ready", False)
+                     and self.act_auto_zoom.isChecked() and self.image_view.has_image())
         if self.current_path == path and self.original_image is not None:
             return True
         try:
@@ -1939,7 +1953,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.current_path = path
         self._last_viewed = (self.current_sol, self.current_folder, path)
         self._load_annotations(path)
-        self._render_current(fit=True)
+        self._render_current(fit=not keep_zoom)
+        if keep_zoom:
+            self.image_view.centerOn(self.image_view.sceneRect().center())
         return True
 
     def _render_current(self, fit: bool = False) -> None:

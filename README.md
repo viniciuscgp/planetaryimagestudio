@@ -72,6 +72,8 @@ Sem argumentos, o programa retoma a última sessão. Os scripts usam diretamente
 
 ## Recursos
 
+- **Auto Zoom**, na barra e no menu **Visualizar**, mantém o nível de ampliação da imagem anterior ao navegar e centraliza a próxima imagem. Desativado, cada imagem volta a se ajustar à janela. A opção é lembrada ao reabrir; a primeira imagem da sessão se ajusta à janela.
+
 - Atalhos: **E** equilibra cores, **O** seleciona Oval, **L** seleciona Lápis e **T** seleciona Texto. **Ctrl+Seta direita/esquerda** gira 90° na direção correspondente.
 - As setas dos controles de ajuste avançam de **2 em 2** (ou **0,02** nos controles decimais, como contraste, cor e meios-tons).
 - Os botões das barras têm ícones. Em **Visualizar → Mostrar texto nos botões das barras**, desmarque para exibir somente ícones, com dicas ao passar o mouse. A preferência é salva; os nomes dos controles numéricos continuam visíveis para identificar cada ajuste.

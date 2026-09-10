@@ -43,7 +43,7 @@ class ToolbarAppearanceMixin:
     def _init_toolbar_appearance(self):
         color = self.palette().windowText().color().name()
         self._toolbar_icons = {key: toolbar_icon(key, color) for key in SHAPES}
-        custom = {'fit': 'fit', 'actual': 'actual', 'original': 'original',
+        custom = {'fit': 'fit', 'actual': 'actual', 'auto_zoom': 'fit', 'original': 'original',
                   'rotate_left': 'left', 'rotate_right': 'right', 'reset_image': 'left',
                   'invert': 'invert', 'balance': 'balance', 'copy': 'copy',
                   'undo_annotation': 'left', 'redo_annotation': 'right',
