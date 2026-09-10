@@ -1,6 +1,6 @@
 """Non-destructive levels and sharpening, with a shared adjustment pipeline."""
 import copy
-from PIL import Image,ImageFilter,ImageEnhance,ImageOps
+from PIL import Image,ImageFilter,ImageEnhance,ImageOps,ImageStat
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage,QPixmap
 from PySide6.QtWidgets import QDialog,QVBoxLayout,QFormLayout,QLabel,QSpinBox,QDoubleSpinBox,QDialogButtonBox
@@ -8,7 +8,29 @@ from image_smoothing import smooth_image
 from value_control import ValueControl
 
 
+def balance_colors(image):
+    """Conservative gray-world estimate; only channel gains, no spatial changes."""
+    sample = image.copy()
+    sample.thumbnail((256, 256))
+    mask = sample.getchannel('A') if 'A' in sample.getbands() else None
+    if mask is not None and not mask.getbbox():
+        return image.copy()
+    means = ImageStat.Stat(sample.convert('RGB'), mask=mask).mean
+    # Missing channels cannot be reconstructed reliably.
+    if min(means) < 1:
+        return image.copy()
+    target = sum(means) / 3
+    gains = [1 + .75 * (max(.67, min(1.5, target / mean)) - 1) for mean in means]
+    lut = [max(0, min(255, round(value * gain))) for gain in gains for value in range(256)]
+    result = image.convert('RGB').point(lut)
+    if 'A' in image.getbands():
+        result.putalpha(image.getchannel('A'))
+    return result
+
+
 def apply_adjustments(image,state):
+    if state.get('color_balance', False):
+        image = balance_colors(image)
     image=smooth_image(image,state.get('smoothing',0))
     alpha=image.getchannel('A') if 'A' in image.getbands() else None
     image=image.convert('RGB')

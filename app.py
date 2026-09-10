@@ -22,6 +22,7 @@ from sol_annotations import SolAnnotationsMixin, AnnotationThumbnailDelegate
 from image_smoothing import SmoothingDialog, smooth_image
 from image_adjustments import AdjustmentDialog, apply_adjustments
 from inline_adjustments import InlineAdjustmentsMixin
+from toolbar_appearance import ToolbarAppearanceMixin
 
 from PySide6.QtCore import QByteArray, QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThread, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QImage, QImageReader, QKeySequence, QPalette, QPen, QPixmap, QTransform
@@ -270,6 +271,9 @@ class ImageView(QGraphicsView):
         super().__init__(parent)
         self._scene = QGraphicsScene(self)
         self._pixmap_item = QGraphicsPixmapItem()
+        # Interpolate only while painting the scaled view; keep source pixels,
+        # image geometry, annotations, and export data unchanged.
+        self._pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.addItem(self._pixmap_item)
         self.setScene(self._scene)
         self.setBackgroundBrush(Qt.GlobalColor.black)
@@ -553,7 +557,7 @@ class ImageAboutDialog(QDialog):
         layout.addLayout(buttons)
 
 
-class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
+class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
     def __init__(self, root: Path, initial_state: dict[str, Any] | None = None, source: ImageSource | str | None = None) -> None:
         super().__init__()
         self._state = dict(initial_state or load_app_state())
@@ -579,6 +583,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         self.rotation = 0
         self.inverted = False
         self.smoothing = 0
+        self.color_balance = False
         self.black_point, self.white_point, self.gamma, self.sharpness = 0, 255, 1.0, 0
         self.brightness = 100
 
@@ -629,6 +634,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         self._build_toolbar()
         self._build_annotation_toolbar()
         self._build_inline_adjustments()
+        self._init_toolbar_appearance()
         self._init_sol_annotations()
         self._load_sol_list()
         self._restore_saved_ui_state()
@@ -844,13 +850,16 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         self.act_sharpen = self._make_action("Nitidez…", lambda: self._focus_inline_adjustment("sharpness"))
         self.act_original = self._make_action("Comparar original", self._toggle_original, "Ctrl+Shift+O")
         self.act_original.setCheckable(True)
+        self.act_balance = self._make_action("Equilibrar cores", self._toggle_color_balance, "E")
+        self.act_balance.setCheckable(True)
+        self.act_balance.setToolTip("Reduz automaticamente a dominante de cor. Estimativa visual; clique novamente para desativar.")
         self.act_smooth = self._make_action("Suavizar imagem", lambda: self._focus_inline_adjustment("smoothing"))
-        self.act_contrast_up = self._make_action("Contraste +", lambda: self._adjust_contrast(0.10), "]")
-        self.act_contrast_down = self._make_action("Contraste -", lambda: self._adjust_contrast(-0.10), "[")
-        self.act_color_up = self._make_action("Cor +", lambda: self._adjust_saturation(0.10))
-        self.act_color_down = self._make_action("Cor -", lambda: self._adjust_saturation(-0.10))
-        self.act_rotate_left = self._make_action("Girar 90° à esquerda", lambda: self._rotate(-90), "Ctrl+L")
-        self.act_rotate_right = self._make_action("Girar 90° à direita", lambda: self._rotate(90), "Ctrl+R")
+        self.act_contrast_up = self._make_action("Contraste +", lambda: self._adjust_contrast(0.02), "]")
+        self.act_contrast_down = self._make_action("Contraste -", lambda: self._adjust_contrast(-0.02), "[")
+        self.act_color_up = self._make_action("Cor +", lambda: self._adjust_saturation(0.02))
+        self.act_color_down = self._make_action("Cor -", lambda: self._adjust_saturation(-0.02))
+        self.act_rotate_left = self._make_action("Girar 90° à esquerda", lambda: self._rotate(-90), "Ctrl+Left")
+        self.act_rotate_right = self._make_action("Girar 90° à direita", lambda: self._rotate(90), "Ctrl+Right")
         self.act_reset_image = self._make_action("Resetar ajustes", self._reset_adjustments, "Ctrl+0")
         self.act_invert = self._make_action("Inverter cores", self._toggle_invert)
         self.act_invert.setCheckable(True)
@@ -894,6 +903,11 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         menu_view.addSeparator()
         menu_view.addAction(self.act_prev)
         menu_view.addAction(self.act_next)
+        menu_view.addSeparator()
+        self.act_toolbar_text = QAction("Mostrar texto nos bot?es das barras", self)
+        self.act_toolbar_text.setCheckable(True)
+        self.act_toolbar_text.toggled.connect(self._set_toolbar_text)
+        menu_view.addAction(self.act_toolbar_text)
 
         menu_image = self.menuBar().addMenu("Imagem")
         menu_image.addAction(self.act_contrast_up)
@@ -901,6 +915,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         menu_image.addSeparator()
         menu_image.addAction(self.act_color_up)
         menu_image.addAction(self.act_color_down)
+        menu_image.addAction(self.act_balance)
         menu_image.addSeparator()
         menu_image.addAction(self.act_rotate_left)
         menu_image.addAction(self.act_rotate_right)
@@ -954,6 +969,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         toolbar.addAction(self.act_rotate_right)
         toolbar.addAction(self.act_reset_image)
         toolbar.addAction(self.act_invert)
+        toolbar.addAction(self.act_balance)
 
     def _thumbnail_divider_moved(self, position, index):
         self._thumb_panel_height = self.center_splitter.sizes()[1]
@@ -1156,6 +1172,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
             "window_size": [int(self.width()), int(self.height())],
             "window_maximized": bool(self.isMaximized()),
             "toolbar_layout": bytes(self.saveState(1)).hex(),
+            "toolbar_text": self.act_toolbar_text.isChecked(),
             "splitter_sizes": [int(v) for v in sizes],
             "thumbnail_panel_height": self._thumb_panel_height,
             "download_panel_open": bool(self._download_panel_open),
@@ -1701,6 +1718,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         if target.get("root") and Path(target["root"]).resolve() != folder.resolve():
             target = {}
         target["toolbar_layout"] = previous["toolbar_layout"]
+        target["toolbar_text"] = previous["toolbar_text"]
         self._state_ready = False
         self.source = self.missions.source_for(mission_id)
         self.root = folder.resolve()
@@ -1929,7 +1947,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
             return
 
         self.act_original.setChecked(False)
-        state = {key: getattr(self, key) for key in ("smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness", "brightness")}
+        state = {key: getattr(self, key) for key in ("color_balance", "smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness", "brightness")}
         image = apply_adjustments(self.original_image, state)
         self._annotation_base = pil_to_qimage(image)
         self._show_annotations(fit=fit)
@@ -1987,6 +2005,15 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         self._render_current(fit=False)
         self._commit_adjustments()
 
+    def _toggle_color_balance(self) -> None:
+        self._flush_inline_adjustments()
+        if self.original_image is None or self._annotation_document is None:
+            self.act_balance.setChecked(False)
+            return
+        self.color_balance = not self.color_balance
+        self._render_current(fit=False)
+        self._commit_adjustments()
+
     def _toggle_invert(self) -> None:
         if self.original_image is None:
             self.act_invert.setChecked(False)
@@ -2026,6 +2053,7 @@ class MainWindow(InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin,
         self.rotation = 0
         self.inverted = False
         self.smoothing = 0
+        self.color_balance = False
         self.black_point, self.white_point, self.gamma, self.sharpness = 0, 255, 1.0, 0
         self.brightness = 100
         self._clear_region()

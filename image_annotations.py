@@ -18,7 +18,7 @@ HISTORY_LIMIT = 50
 
 
 def empty_state():
-    return {"drawings": [], "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0, "brightness": 100}
+    return {"drawings": [], "color_balance": False, "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0, "brightness": 100}
 
 
 def number(value, minimum, maximum):
@@ -28,6 +28,8 @@ def number(value, minimum, maximum):
 
 
 def validate_state(state):
+    if not isinstance(state.setdefault("color_balance", False), bool):
+        raise ValueError("Equil?brio de cores inv?lido")
     number(state.setdefault("brightness", 100), 0, 200)
     number(state.setdefault("black_point", 0), 0, 254)
     number(state.setdefault("white_point", 255), 1, 255)
@@ -172,6 +174,9 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
             action = QAction(label, self)
             action.setCheckable(True)
             action.setData(tool)
+            shortcut = {"ellipse": "O", "pencil": "L", "text": "T"}.get(tool)
+            if shortcut:
+                action.setShortcut(shortcut)
             self._drawing_tools.addAction(action)
             toolbar.addAction(action)
             if tool == "pan":
@@ -336,6 +341,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.contrast, self.saturation, self.rotation = state["contrast"], state["saturation"], state["rotation"]
         self.inverted = state["inverted"]
         self.smoothing = state["smoothing"]
+        self.color_balance = state["color_balance"]
         for key in ("black_point", "white_point", "gamma", "sharpness", "brightness"):
             setattr(self, key, state[key])
         self._sync_annotation_controls()
@@ -344,6 +350,8 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self._sync_inline_adjustments()
         document = self._annotation_document
         self.act_smooth.setEnabled(document is not None)
+        self.act_balance.setEnabled(document is not None)
+        self.act_balance.setChecked(bool(document and document.state["color_balance"]))
         for action in (self.act_levels, self.act_sharpen, self.act_original, self.act_brightness):
             action.setEnabled(document is not None)
         self.act_invert.setChecked(bool(document and document.state["inverted"]))
@@ -396,7 +404,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         if self._annotation_document is None:
             return
         state = copy.deepcopy(self._annotation_document.state)
-        state.update(contrast=self.contrast, saturation=self.saturation, rotation=self.rotation, inverted=self.inverted, smoothing=self.smoothing, black_point=self.black_point, white_point=self.white_point, gamma=self.gamma, sharpness=self.sharpness, brightness=self.brightness)
+        state.update(color_balance=self.color_balance, contrast=self.contrast, saturation=self.saturation, rotation=self.rotation, inverted=self.inverted, smoothing=self.smoothing, black_point=self.black_point, white_point=self.white_point, gamma=self.gamma, sharpness=self.sharpness, brightness=self.brightness)
         self._annotation_document.commit(state)
         self._persist_annotations()
 

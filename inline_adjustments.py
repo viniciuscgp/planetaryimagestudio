@@ -1,6 +1,6 @@
 """Compact toolbar controls that adjust the main image in place."""
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QToolBar, QWidget, QHBoxLayout, QLabel, QSlider, QDoubleSpinBox, QPushButton
+from PySide6.QtWidgets import QToolBar, QWidget, QHBoxLayout, QLabel, QSlider, QDoubleSpinBox, QPushButton, QSizePolicy
 
 
 FIELDS = (
@@ -35,13 +35,16 @@ class InlineAdjustmentsMixin:
             layout.addWidget(QLabel(label))
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(round(low * factor), round(high * factor))
+            slider.setSingleStep(2)
             slider.setFixedWidth(90)
             spin = QDoubleSpinBox()
             spin.setDecimals(2 if factor == 100 else 0)
             spin.setRange(low, high)
-            spin.setSingleStep(.05 if factor == 100 else 1)
+            spin.setSingleStep(2 / factor)
             spin.setKeyboardTracking(False)
-            spin.setFixedWidth(65)
+            # Let Qt reserve space for the full value and the current theme's
+            # arrow buttons, including font/display scaling on Windows.
+            spin.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
             reset = QPushButton('↺')
             reset.setFixedWidth(24)
             reset.setToolTip(f'Restaurar {label.lower()}: {default}')

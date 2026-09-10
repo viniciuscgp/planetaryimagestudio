@@ -72,11 +72,16 @@ Sem argumentos, o programa retoma a última sessão. Os scripts usam diretamente
 
 ## Recursos
 
+- Atalhos: **E** equilibra cores, **O** seleciona Oval, **L** seleciona Lápis e **T** seleciona Texto. **Ctrl+Seta direita/esquerda** gira 90° na direção correspondente.
+- As setas dos controles de ajuste avançam de **2 em 2** (ou **0,02** nos controles decimais, como contraste, cor e meios-tons).
+- Os botões das barras têm ícones. Em **Visualizar → Mostrar texto nos botões das barras**, desmarque para exibir somente ícones, com dicas ao passar o mouse. A preferência é salva; os nomes dos controles numéricos continuam visíveis para identificar cada ajuste.
+
 - Lista de coleções à esquerda; na missão Curiosity, os diretórios `SOLxxxx` aparecem com o Sol mais recente primeiro.
 - Thumbnails horizontais na parte inferior.
 - Primeira imagem da coleção é aberta automaticamente.
 - Clique numa thumbnail para trocar a imagem principal.
 - **Roda do mouse sobre a imagem:** zoom, sem precisar de Ctrl.
+- O zoom usa interpolação suave apenas na exibição, para reduzir o aspecto quadriculado dos pixels. Mantém as proporções e não altera os pixels da imagem, as anotações ou a exportação. É independente do ajuste **Suavizar imagem**; não recupera detalhes ausentes no original.
 - **Botão esquerdo + arrastar:** pan.
 - **Botão direito na imagem:**
   - `Copy`: copia a imagem atualmente exibida para o clipboard.
@@ -93,6 +98,8 @@ Sem argumentos, o programa retoma a última sessão. Os scripts usam diretamente
 - `F5`: atualiza a lista de coleções.
 
 ## Desenhos e ajustes por imagem
+
+**Equilibrar cores**, na barra de ferramentas e no menu **Imagem**, aplica uma correção automática moderada para reduzir dominantes como o amarelo. Clique novamente para desativar. É uma estimativa baseada nas cores médias da foto, não uma calibração de cores reais; cenas naturalmente coloridas também podem ser neutralizadas. Altera apenas as cores da versão editada, sem mudar formas ou o arquivo original. O ajuste é salvo por imagem, participa de Desfazer/Refazer, Comparar original e Resetar ajustes, e aparece na cópia/exportação editada.
 
 A barra **Desenho** permite marcar a imagem sem alterar o arquivo original:
 
