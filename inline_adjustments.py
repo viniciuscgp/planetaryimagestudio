@@ -12,6 +12,8 @@ FIELDS = (
     ('white_point', 'Branco', 1, 255, 255, 1),
     ('sharpness', 'Nitidez', 0, 300, 0, 1),
     ('smoothing', 'Suavizar', 0, 100, 0, 1),
+    ('percentile_low', 'Percentil inferior', 0, 99.99, 1, 100),
+    ('percentile_high', 'Percentil superior', .01, 100, 99, 100),
 )
 
 
@@ -25,9 +27,11 @@ class InlineAdjustmentsMixin:
         for i, (key, label, low, high, default, factor) in enumerate(FIELDS):
             if i % 4 == 0:
                 self.addToolBarBreak()
-                toolbar = QToolBar('Ajustes' if i == 0 else 'Detalhes', self)
+                toolbar = QToolBar('Ajustes' if i == 0 else 'Percentis' if i == 8 else 'Detalhes', self)
                 toolbar.setObjectName(f'inline_adjustments_{i}')
                 self.addToolBar(toolbar)
+                if i == 8:
+                    toolbar.addAction(self.act_percentile_stretch)
             widget = QWidget()
             layout = QHBoxLayout(widget)
             layout.setContentsMargins(4, 2, 4, 2)
@@ -66,6 +70,12 @@ class InlineAdjustmentsMixin:
             value = min(value, self._inline_pending.get('white_point', self.white_point) - 1)
         elif key == 'white_point':
             value = max(value, self._inline_pending.get('black_point', self.black_point) + 1)
+        elif key == 'percentile_low':
+            value = min(value, self._inline_pending.get('percentile_high', self.percentile_high) - .01)
+        elif key == 'percentile_high':
+            value = max(value, self._inline_pending.get('percentile_low', self.percentile_low) + .01)
+        if key.startswith('percentile_'):
+            self._inline_pending['percentile_stretch'] = True
         self._inline_pending[key] = value
         self._sync_inline_adjustments()
         # Coalesce drag events without postponing updates until release.
@@ -85,6 +95,8 @@ class InlineAdjustmentsMixin:
         self._commit_adjustments()
 
     def _sync_inline_adjustments(self):
+        self.act_auto_enhance_mars.setChecked(self.auto_enhance_mars)
+        self.act_percentile_stretch.setChecked(self.percentile_stretch)
         for key, (slider, spin, widget, toolbar, factor) in getattr(self, '_inline_controls', {}).items():
             widget.setEnabled(self.original_image is not None and self._annotation_document is not None)
             value = self._inline_pending.get(key, getattr(self, key))

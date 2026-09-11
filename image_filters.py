@@ -10,7 +10,7 @@ from catalog import list_images
 
 
 def changed(state):
-    return bool(state.get('drawings') or state.get('contrast',1)!=1 or state.get('saturation',1)!=1
+    return bool(state.get('drawings') or state.get('auto_enhance_mars',False) or state.get('percentile_stretch',False) or state.get('contrast',1)!=1 or state.get('saturation',1)!=1
                 or state.get('rotation',0)%360 or state.get('inverted',False) or state.get('smoothing',0) or state.get('sharpness',0)
                 or state.get('black_point',0)!=0 or state.get('white_point',255)!=255 or state.get('gamma',1)!=1 or state.get('brightness',100)!=100)
 

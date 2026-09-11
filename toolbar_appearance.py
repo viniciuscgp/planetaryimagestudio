@@ -12,6 +12,7 @@ SHAPES = {
     'rectangle': '<rect x="3" y="5" width="18" height="14" rx="1"/>',
     'text': '<path d="M4 6V3h16v3M12 3v18M8 21h8"/>',
     'select': '<path d="m5 3 14 10-7 1-3 7z"/>',
+    'wand': '<path d="m3 19 11-11 3 3L6 22zM11 11l3 3M17 2v4m-2-2h4M21 9v4m-2-2h4M7 3v4M5 5h4"/>',
     'region': '<rect x="3" y="3" width="18" height="18" stroke-dasharray="3 3"/>',
     'fit': '<path d="M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6"/><rect x="7" y="7" width="10" height="10"/>',
     'actual': '<path d="m4 8 3-3v14m10-11 3-3v14M11 9h1m-1 6h1"/>',
@@ -44,8 +45,10 @@ class ToolbarAppearanceMixin:
         color = self.palette().windowText().color().name()
         self._toolbar_icons = {key: toolbar_icon(key, color) for key in SHAPES}
         custom = {'fit': 'fit', 'actual': 'actual', 'auto_zoom': 'fit', 'original': 'original',
+                  'percentile_stretch': 'balance',
+                  'auto_enhance_mars': 'color',
                   'rotate_left': 'left', 'rotate_right': 'right', 'reset_image': 'left',
-                  'invert': 'invert', 'balance': 'balance', 'copy': 'copy',
+                  'invert': 'invert', 'balance': 'balance', 'copy': 'copy', 'forensic_texture': 'region', 'morphological': 'ellipse', 'magic_wand': 'wand',
                   'undo_annotation': 'left', 'redo_annotation': 'right',
                   'edit_annotation_text': 'text', 'copy_region': 'copy', 'clear_region': 'clear'}
         for name, kind in custom.items():

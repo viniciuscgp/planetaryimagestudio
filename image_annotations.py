@@ -11,14 +11,14 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QAction, QActionGroup, QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import QColorDialog, QInputDialog, QLabel, QMenu, QMessageBox, QPushButton, QSpinBox, QToolBar
 
-from annotation_editing import AnnotationEditingMixin, image_transform
+from annotation_editing import AnnotationEditingMixin, image_transform, drawing_shape
 
 
 HISTORY_LIMIT = 50
 
 
 def empty_state():
-    return {"drawings": [], "color_balance": False, "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0, "brightness": 100}
+    return {"drawings": [], "color_balance": False, "contrast": 1.0, "saturation": 1.0, "rotation": 0, "inverted": False, "smoothing": 0, "black_point": 0, "white_point": 255, "gamma": 1.0, "sharpness": 0, "brightness": 100, "percentile_stretch": False, "percentile_low": 1, "percentile_high": 99, "auto_enhance_mars": False}
 
 
 def number(value, minimum, maximum):
@@ -28,6 +28,14 @@ def number(value, minimum, maximum):
 
 
 def validate_state(state):
+    if not isinstance(state.setdefault('auto_enhance_mars',False),bool):
+        raise ValueError('Estado do ajuste automático inválido')
+    if not isinstance(state.setdefault('percentile_stretch',False),bool):
+        raise ValueError('Estado da expansão por percentis inválido')
+    number(state.setdefault('percentile_low',1),0,99.99)
+    number(state.setdefault('percentile_high',99),.01,100)
+    if state['percentile_low'] >= state['percentile_high']:
+        raise ValueError('O percentil inferior deve ser menor que o superior.')
     if not isinstance(state.setdefault("color_balance", False), bool):
         raise ValueError("Equil?brio de cores inv?lido")
     number(state.setdefault("brightness", 100), 0, 200)
@@ -47,7 +55,7 @@ def validate_state(state):
     if not isinstance(state["drawings"], list):
         raise ValueError("Lista de desenhos inválida")
     for drawing in state["drawings"]:
-        if drawing["kind"] not in ("pencil", "circle", "ellipse", "rectangle", "text") or not QColor(drawing["color"]).isValid():
+        if drawing["kind"] not in ("pencil", "circle", "ellipse", "rectangle", "text", "polygon") or not QColor(drawing["color"]).isValid():
             raise ValueError("Desenho inválido")
         number(drawing["width"], 1, 200)
         points = drawing["points"]
@@ -56,6 +64,11 @@ def validate_state(state):
         for x, y in points:
             number(x, -1e7, 1e7)
             number(y, -1e7, 1e7)
+        if drawing['kind'] == 'polygon':
+            rings = drawing.get('rings')
+            if (not isinstance(rings,list) or not rings or
+                    any(type(n) is not int or n < 3 for n in rings) or sum(rings) != len(points)):
+                raise ValueError('Contornos da seleção inválidos')
         if drawing["kind"] == "text":
             number(drawing["font_size"], 6, 400)
             if not isinstance(drawing["text"], str) or not isinstance(drawing["font_family"], str):
@@ -131,6 +144,8 @@ def composite_image(base, drawings, rotation):
                 for point in points[1:]:
                     path.lineTo(point)
                 painter.drawPath(path)
+        elif drawing["kind"] == "polygon":
+            painter.drawPath(drawing_shape(drawing))
         elif drawing["kind"] == "circle":
             radius = math.hypot(points[1].x() - points[0].x(), points[1].y() - points[0].y())
             painter.drawEllipse(points[0], radius, radius)
@@ -181,6 +196,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
             toolbar.addAction(action)
             if tool == "pan":
                 action.setChecked(True)
+        toolbar.addAction(self.act_magic_wand)
         self._drawing_tools.triggered.connect(self._drawing_tool_changed)
         toolbar.setToolTip("Lápis: arraste para desenhar. Oval e retângulo: arraste de um canto ao canto oposto. Texto: clique para inserir. Navegar: arraste para mover a imagem.")
         toolbar.addSeparator()
@@ -342,7 +358,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.inverted = state["inverted"]
         self.smoothing = state["smoothing"]
         self.color_balance = state["color_balance"]
-        for key in ("black_point", "white_point", "gamma", "sharpness", "brightness"):
+        for key in ("black_point", "white_point", "gamma", "sharpness", "brightness", "percentile_stretch", "percentile_low", "percentile_high", "auto_enhance_mars"):
             setattr(self, key, state[key])
         self._sync_annotation_controls()
 
@@ -352,7 +368,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         self.act_smooth.setEnabled(document is not None)
         self.act_balance.setEnabled(document is not None)
         self.act_balance.setChecked(bool(document and document.state["color_balance"]))
-        for action in (self.act_levels, self.act_sharpen, self.act_original, self.act_brightness):
+        for action in (self.act_levels, self.act_sharpen, self.act_original, self.act_brightness, self.act_percentile_stretch, self.act_auto_enhance_mars, self.act_export_auto_stages):
             action.setEnabled(document is not None)
         self.act_invert.setChecked(bool(document and document.state["inverted"]))
         self.act_undo_annotation.setEnabled(bool(document and document.undo))
@@ -423,6 +439,8 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
             return
         state = copy.deepcopy(self._annotation_document.state)
         state.update(color_balance=self.color_balance, contrast=self.contrast, saturation=self.saturation, rotation=self.rotation, inverted=self.inverted, smoothing=self.smoothing, black_point=self.black_point, white_point=self.white_point, gamma=self.gamma, sharpness=self.sharpness, brightness=self.brightness)
+        state.update(percentile_stretch=self.percentile_stretch,percentile_low=self.percentile_low,percentile_high=self.percentile_high)
+        state['auto_enhance_mars'] = self.auto_enhance_mars
         self._annotation_document.commit(state)
         self._persist_annotations()
 

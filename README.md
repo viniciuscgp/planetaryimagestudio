@@ -1,5 +1,86 @@
 # Planetary Image Studio
 
+## Auto Enhance Mars Image
+
+Use **Imagem / Auto Enhance Mars Image** para aplicar automaticamente o preset aprovado: **Percentis RGB 32-99 sobre o original limpo**. Com os demais filtros desligados, o resultado e identico ao botao manual de percentis configurado em 32 e 99. Nao ha correcao de iluminacao, recoloracao, CLAHE ou mistura posterior neste preset. Os auxiliares dessas operacoes continuam no modulo, mas nao participam do automatico.
+
+A mascara e exatamente a da ferramenta manual: max(R,G,B)>5 e alfa>0. Pixels quase pretos e transparentes nao entram nas estatisticas; bordas cinzentas ainda podem entrar. A mascara circular conservadora nao e usada neste preset porque mudaria os cortes e o resultado aprovado. O percentil 32 leva os valores abaixo desse corte a zero por canal. Os valores 32-99 sao fixos no preset e independentes dos controles da ferramenta manual.
+
+Original em disco, desenhos, zoom, Undo/Redo e Reset continuam no fluxo existente. Os filtros manuais ativos sao aplicados depois do automatico. Deixe o percentil manual desligado ao usar este preset para evitar duas expansoes consecutivas.
+
+**Imagem / Salvar etapas do Auto Enhance** continua exportando oito PNGs e parameters.json para uma pasta nova. Por compatibilidade, os nomes antigos permanecem: illumination_corrected e o original; white_balance e final_clahe repetem o resultado dos percentis. O mapa illumination e o NPY contem zeros, identificados nos metadados como placeholders de uma etapa desativada. A exportacao usa o original limpo, sem desenhos ou ajustes manuais.
+
+Testes: `python -m unittest test_auto_enhance_mars test_percentile_stretch`.
+
+## Expansão por Percentis (Percentile Stretch)
+
+Use **Imagem → Expansão por Percentis (Percentile Stretch)**, o menu do botão direito ou o botão na barra **Percentis**. O ajuste é aplicado imediatamente na imagem principal, inicialmente com **1% e 99%**, sem outro visualizador. O botão liga/desliga o ajuste. Os controles **Percentil inferior** e **Percentil superior** na mesma barra permitem alterar os limites; ao ajustá-los, a expansão é ativada. Sempre é mantido `0 ≤ inferior < superior ≤ 100`.
+
+Cada canal RGB recebe `(pixel − p_low) × 255 / (p_high − p_low)`, com clipping e arredondamento para 8 bits. Pixels do original com todos os canais ≤ 5, ou alfa zero, são excluídos do cálculo dos percentis. A transformação é aplicada normalmente à imagem; o alfa é preservado. Se não houver pixels válidos, o ajuste não modifica o resultado; canais sem variação entre os percentis permanecem inalterados. A máscara é obtida do original, para que inversão/brilho não transformem uma borda inválida em uma amostra válida.
+
+O ajuste integra `apply_adjustments()` após os outros ajustes de pixels e antes das marcações/rotação, usando a imagem de trabalho resultante. Não acumula novas expansões a cada renderização. Parâmetros e ativação usam o histórico de anotações existente, com **Desfazer/Refazer**, restauração por imagem, **Comparar original**, cópia/exportação final e filtro **Editadas**. **Resetar ajustes** desativa a expansão e restaura 1–99. Executar o ajuste nunca sobrescreve o arquivo original; o estado é salvo no arquivo de anotações, como nos demais filtros. Testes: `python -m unittest test_percentile_stretch -v`.
+
+## Varinha mágica — seleção por tolerância
+
+Abra **Análise → Varinha mágica**, pressione **V** ou use o ícone de varinha na barra **Desenho**, junto do lápis e do oval. Clique dentro da figura na prévia e ajuste **Tolerância (0–255)**. Azul mostra a seleção conectada ao ponto clicado. Em **Cor RGB**, cada canal pode diferir do pixel inicial até a tolerância escolhida; em **Luminosidade**, a comparação usa grayscale. **Conectar diagonais** troca a vizinhança de quatro para oito conexões. A referência é sempre o pixel inicial, evitando que uma sequência de pequenas diferenças avance indefinidamente por um gradiente.
+
+Uma tolerância baixa seleciona uma faixa restrita de cor; aumentá-la inclui mais variação nos pixels conectados. A varinha usa o original, sem ajustes ou desenhos, mantém a rotação na prévia e funciona offline, sem IA ou reconhecimento de figuras. Se figura e fundo têm cores semelhantes ou estão conectados, a seleção pode atravessar esse limite: confira a prévia antes de aplicar. **Cancelar** não cria marcação.
+
+**Criar marcação** converte o resultado em contornos fechados do sistema de anotações existente, incluindo vazios internos. O contorno fica selecionado e pode ser movido, redimensionado, excluído, salvo e desfeito/refeito; em seguida use **Morphological Analysis · Área marcada**. A conversão dos pixels para contornos editáveis pode diferir aproximadamente um pixel nas bordas. Os dados usam o tipo `polygon`, com pontos e comprimentos dos anéis no mesmo arquivo `.annotations.json`. Nenhum pixel original é alterado. Cálculo em `magic_wand.py`, prévia em `magic_wand_ui.py`; teste específico: `python -m unittest test_magic_wand -v`.
+
+## Fase 2 — Análise morfológica da área marcada
+
+Desenhe uma elipse, retângulo ou um limite com lápis, ou use **Selecionar área**. Abra **Análise → Morphological Analysis · Área marcada**, também na barra Análise. Sem uma marcação que contenha uma área válida, a ferramenta mostra **“Marque primeiro a área que deseja analisar.”** Não há seleção automática da imagem inteira.
+
+A ferramenta reaproveita `AnnotationDocument.state["drawings"]`, a seleção ativa e o retângulo de seleção existentes. A marcação selecionada tem prioridade; na ausência dela, usa a seleção de área atual ou a última marcação válida. O seletor da janela permite escolher outra marcação existente e analisá-la. Textos, pontos, linhas sem interior, áreas externas à imagem e máscaras muito pequenas não são entradas válidas. O lápis é fechado com um segmento entre início e fim; essa aproximação é indicada no nome da marcação. Círculos antigos continuam usando centro e raio; elipses e retângulos usam seus dois cantos. A seleção de área é convertida da visualização rotacionada para as coordenadas originais.
+
+A região em análise permanece contornada em **ciano**. A janela exibe a imagem original com a rotação atual, sem filtros/desenhos incorporados aos pixels analisados. Contorno estimado, bordas internas, fissuras candidatas, cavidades/regiões escuras, eixo principal, concavidades, saliências candidatas e estruturas/divisões internas têm controles independentes de sobreposição. **Resumo da forma** aparece primeiro; **Detalhes técnicos** é recolhível. Processamento em segundo plano com cancelamento; os desenhos, seus arquivos, desfazer/refazer e os filtros não são alterados.
+
+`morphological_region_ui.py` usa `drawing_shape()` da seleção existente para rasterizar a máscara; `MorphologicalRegionAnalyzer` em `morphological_region_analyzer.py` recebe apenas RGB uint8 + máscara. Os cálculos usam OpenCV/NumPy e somente pixels da área escolhida: Otsu/componentes conexos para uma silhueta estimada por contraste, Canny para bordas, fundo local por convolução normalizada dentro da máscara para regiões escuras, PCA para orientação/alongamento, fecho convexo e defeitos de convexidade, reflexão nos dois eixos PCA para simetria aproximada, Hough para segmentos e contornos para estruturas curvas. Nenhum modelo de IA é usado.
+
+Uma candidata a abertura exige componente escuro alongado, contraste com seu anel interno à marcação, dois lados com ajustes aproximadamente paralelos e término afastado do limite da seleção. As medidas incluem extensão projetada (não comprimento percorrido de uma fissura curva), espessura média, orientação, intensidade, contraste, erro dos ajustes e suporte do entorno. Esse suporte descreve continuidade local de pixels, não uma conexão física comprovada. Não se infere profundidade de cavidades nem se reconhecem objetos. A silhueta por contraste pode falhar com iluminação ou texturas complexas; nesse caso o resumo informa que área, orientação e simetria descrevem o limite marcado, sem apresentá-lo como um contorno descoberto.
+
+Teste específico: `python -m unittest test_morphological_region -v`.
+
+## Forensic Texture Analysis
+
+Abra uma imagem e use **Análise → Forensic Texture Analysis**, também disponível na barra **Análise**. A ferramenta abre uma janela própria, com uma cópia do original antes dos ajustes e marcações. Fechá-la preserva os filtros, desenhos, zoom e histórico do visualizador. Não há escrita no original, IA generativa, super-resolution ou deconvolução.
+
+Selecione **32×32, 64×64 e/ou 128×128** e clique em **Analisar**. O processamento é offline, em segundo plano, com cancelamento. Janelas têm passo de metade do tamanho, incluem as últimas linhas/colunas e são recortadas quando a imagem é menor que a janela. As coordenadas são do original orientado por EXIF, com origem `(0, 0)` no canto superior esquerdo; rotações manuais do visualizador não são aplicadas à análise.
+
+- **Aplicar heatmap** liga/desliga a sobreposição; **Opacidade** ajusta a transparência. A roda dá zoom e arrastar move a imagem.
+- O seletor mostra o **Texture Anomaly Score** ou a anomalia individual de high frequency, fine/coarse, gradiente, FFT, compression grid, RGB e boundary. É possível comparar a fusão multiescala com cada escala separadamente. Cores usam sempre o intervalo 0–1.
+- **Incluir no score** permite ativar/desativar cada métrica sem repetir a análise. Todas começam com o mesmo peso; desativar todas zera o score. A API também aceita pesos numéricos não negativos.
+- A lista mostra as dez janelas com maior score, suprimindo sobreposições superiores a 25% da menor janela; imagens pequenas podem ter menos de dez. Clicar na lista destaca a janela. Clicar no heatmap inspeciona a janela de maior score que cobre aquele pixel na escala escolhida. O valor agregado do pixel é mostrado separadamente do score da janela.
+- **Exportar CSV** salva todas as janelas, coordenadas, medidas brutas, componentes FFT, fases módulo 8, correlações e scores individuais/final.
+- Os três botões de imagem salvam PNG do mapa selecionado, original com esse mapa na opacidade atual, ou original marcado com as regiões. **Salvar todos os mapas** salva PNGs e arrays numéricos NPZ das anomalias individuais e score final, inclusive por escala, além de CSV e metadados JSON. Salva também mapas de medidas brutas por escala em `raw_metrics_*.npz` e prévias `raw_*.png`; os intervalos dessas prévias estão no JSON, pois as medidas possuem unidades diferentes. Cada exportação cria uma subpasta nova para proteger arquivos existentes.
+
+### Medições e interpretação
+
+O destaque padrão é **Limite manual**. O usuário define o corte: valores abaixo dele ficam transparentes; no corte já aparece amarelo visível, com a opacidade escolhida. A cor escurece progressivamente até vermelho escuro em **100%**, sem usar o máximo da imagem para reajustar a escala. Por exemplo, corte em 50% distribui as cores entre 50% e 100%; corte em 10% distribui entre 10% e 100%. O limite é inclusivo. Com corte em 100%, apenas valores de 100% aparecem, em vermelho escuro. Esse controle usa os valores do mapa selecionado, mantendo os cálculos originais.
+
+**Mais fortes nesta imagem (5%)** continua disponível como alternativa: mostra em vermelho os pixels a partir do percentil 95 do mapa selecionado, incluindo empates, e escurece o restante. Um contorno branco separa as áreas destacadas. A cruz branca localiza o maior valor; **Ir ao maior valor** centraliza esse ponto e abre seu resumo. Esse contraste é relativo à imagem e pode destacar scores baixos; o valor real continua visível. Mapas uniformes não recebem destaque nesse modo.
+
+Os quadrados agora ficam desligados por padrão. **Mostrar janelas de medição** permite recuperá-los: são limites das janelas de cálculo, não contornos exatos de uma anomalia. O mapa também pode ter transições retangulares porque agrega essas janelas; o destaque não inventa um contorno de objeto. Picos nas bordas são identificados na interface, pois ali há menos vizinhança disponível para comparação. Isso não altera nem exclui os scores das bordas.
+
+**Destacar áreas mais anômalas** adiciona uma camada opcional de amarelo a vermelho sobre as áreas que atingem a **Intensidade mínima** escolhida (inicialmente 40%). O vermelho indica valores mais altos da métrica/escala selecionada; áreas abaixo do limite ficam transparentes. A camada possui opacidade própria, informa a porcentagem da área destacada e pode ser salva com **Salvar original + destaques**. Para vê-la sozinha sobre a imagem original, desative **Aplicar heatmap**. Se nenhuma área atingir o limite, a interface informa isso; reduzir o limite revela diferenças menores, sem alterar os scores ou a imagem original.
+
+A janela apresenta primeiro **Resumo da análise**, com nomes amigáveis, intensidade em porcentagem e categorias: Muito baixa `[0; 0,20)`, Baixa `[0,20; 0,40)`, Moderada `[0,40; 0,60)`, Alta `[0,60; 0,80)` e Muito alta `[0,80; 1]`. Esses rótulos descrevem os valores existentes; não mudam o detector. **Detalhes técnicos**, recolhido por padrão, preserva os nomes e números originais.
+
+Cada métrica mostra a porcentagem das **outras janelas da imagem**, em todas as escalas analisadas, que têm valor estritamente menor. Empates não contam como inferiores; se houver apenas uma janela, a comparação fica indisponível. As janelas se sobrepõem, portanto essa comparação não representa porcentagem da área da imagem. A interpretação curta considera as métricas ativas, sua intensidade e posição relativa; uma diferença pequena pode estar entre as maiores de uma imagem uniforme. Correlação RGB sem variância suficiente é identificada como não interpretável. Categorias e percentis são apenas apresentação, implementada em `forensic_texture_presentation.py`; os cálculos e arquivos exportados permanecem iguais.
+
+O resumo distingue **Ponto clicado**, **Região analisada**, **Tamanho da região**, **Valor visual do heatmap** (métrica e escala exibidas) e **Score real da região** (janela selecionada). Isso permite reconhecer rapidamente uma região comum ou incomum dentro daquela imagem, antes de abrir os detalhes.
+
+`forensic_texture_analyzer.py` contém `ForensicTextureAnalyzer`, independente de Qt. `forensic_texture_ui.py` contém os controles, execução em thread e visualização. `METRICS` centraliza os componentes usados pelos seletores e pela combinação, enquanto menu e barra Análise acomodam novas ferramentas.
+
+A entrada é RGB/grayscale `uint8` (RGBA tem o alfa ignorado). O grayscale usa OpenCV; resíduo = imagem − Gaussian sigma 1; RMS é medido em níveis de cinza de 8 bits. Fine/coarse divide a energia desse resíduo pela energia de Gaussian sigma 2 − Gaussian sigma 4, com piso 0,0625 no denominador. O gradiente é a média da magnitude Sobel 3×3. A FFT remove a média, aplica Hann e mede quatro bandas radiais, quatro setores angulares e concentração no pico. Compression grid compara diferenças adjacentes nas oito fases de X e Y usando coordenadas globais. RGB mede Pearson R/G, R/B, G/B; canais sem variância produzem correlação zero e `rgb_valid=False` (não interpretável como descorrelação). Boundary compara RMS do resíduo e gradiente com um anel externo de largura de 1/4 da janela, limitado às bordas da imagem.
+
+As três medidas escalares de energia/detalhe/gradiente usam `log1p` antes da normalização. Para cada componente, desvios robustos de mediana/MAD são comparados com a imagem inteira (peso 0,2), janelas de luminosidade semelhante (0,3) e vizinhos imediatos (0,5). Pisos de dispersão evitam divisão por zero; `1 − exp(−z/3)` leva os desvios a 0–1. Janelas sobrepostas são promediadas por pixel; a fusão usa metade da média entre escalas e metade do máximo, preservando respostas pequenas. O score final é a média ponderada dos mapas de anomalia.
+
+**O score é uma medida relativa, não uma probabilidade de manipulação.** Texturas naturais, iluminação, distância, foco e processamento da câmera podem gerar diferenças. A comparação contextual reduz esse efeito, mas não identifica materiais nem elimina falsos positivos. A periodicidade módulo 8 é uma assinatura de pixels, não uma inspeção dos coeficientes JPEG; redimensionamento e orientação podem mudar sua fase. Grandes imagens exigem mais tempo e memória, pois não são reduzidas antes da medição.
+
+Dependências adicionais: NumPy e OpenCV (`opencv-python-headless`, sem outra interface gráfica). Instale com o ambiente virtual do projeto: `python -m pip install -r requirements.txt`. Depois de instaladas, a análise não acessa a rede. Testes específicos: `python -m unittest test_forensic_texture -v`.
+
 Aplicativo desktop em Python para visualizar, ajustar e marcar imagens de planetas e luas, sem modificar os originais.
 
 ## Configurar planetas, missões e pastas

@@ -16,7 +16,16 @@ def image_transform(rotation, width, height):
 def drawing_shape(drawing):
     points = [QPointF(*xy) for xy in drawing["points"]]
     path = QPainterPath()
-    if drawing["kind"] == "circle":
+    if drawing["kind"] == "polygon":
+        offset = 0
+        path.setFillRule(Qt.FillRule.OddEvenFill)
+        for length in drawing['rings']:
+            path.moveTo(points[offset])
+            for point in points[offset+1:offset+length]:
+                path.lineTo(point)
+            path.closeSubpath()
+            offset += length
+    elif drawing["kind"] == "circle":
         radius = math.hypot(points[1].x() - points[0].x(), points[1].y() - points[0].y())
         path.addEllipse(points[0], max(radius, 0.5), max(radius, 0.5))
     elif drawing["kind"] in ("ellipse", "rectangle"):

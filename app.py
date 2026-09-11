@@ -586,6 +586,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.color_balance = False
         self.black_point, self.white_point, self.gamma, self.sharpness = 0, 255, 1.0, 0
         self.brightness = 100
+        self.percentile_stretch,self.percentile_low,self.percentile_high = False,1,99
+        self.auto_enhance_mars = False
 
         self.metadata_client = self.source.create_metadata_client()
         self.thread_pool = QThreadPool(self)
@@ -838,6 +840,15 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         return action
 
     def _build_actions(self) -> None:
+        self.act_auto_enhance_mars = self._make_action("Auto Enhance Mars Image", self._toggle_auto_enhance_mars)
+        self.act_auto_enhance_mars.setCheckable(True)
+        self.act_auto_enhance_mars.setToolTip('Original limpo → correção de iluminação → percentis 1–99 → Gray World → CLAHE em L. Clique novamente para desativar.')
+        self.act_export_auto_stages = self._make_action('Salvar etapas do Auto Enhance…',self._export_auto_enhance_stages)
+        self.act_percentile_stretch = self._make_action("Expansão por Percentis (Percentile Stretch)", self._toggle_percentile_stretch)
+        self.act_percentile_stretch.setCheckable(True)
+        self.act_forensic_texture = self._make_action("Forensic Texture Analysis", self._open_forensic_texture)
+        self.act_morphological = self._make_action("Morphological Analysis · Área marcada", self._open_morphological)
+        self.act_magic_wand = self._make_action("Varinha mágica", self._open_magic_wand, "V")
         self.act_open_root = self._make_action("Abrir coleção...", self._choose_root, QKeySequence.StandardKey.Open)
         self.act_refresh = self._make_action("Atualizar", self._load_sol_list, "F5")
         self.act_exit = self._make_action("Sair", self.close, QKeySequence.StandardKey.Quit)
@@ -933,8 +944,16 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         menu_image.addAction(self.act_levels)
         menu_image.addAction(self.act_sharpen)
         menu_image.addAction(self.act_brightness)
+        menu_image.addAction(self.act_percentile_stretch)
+        menu_image.addAction(self.act_auto_enhance_mars)
+        menu_image.addAction(self.act_export_auto_stages)
         menu_image.addSeparator()
         menu_image.addAction(self.act_original)
+
+        self.analysis_menu = self.menuBar().addMenu("Análise")
+        self.analysis_menu.addAction(self.act_forensic_texture)
+        self.analysis_menu.addAction(self.act_morphological)
+        self.analysis_menu.addAction(self.act_magic_wand)
 
         menu_download = self.menuBar().addMenu("Downloader")
         menu_download.addAction(self.act_download_now)
@@ -978,6 +997,12 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         toolbar.addAction(self.act_reset_image)
         toolbar.addAction(self.act_invert)
         toolbar.addAction(self.act_balance)
+        toolbar.addAction(self.act_auto_enhance_mars)
+        self.analysis_toolbar = QToolBar("Análise", self)
+        self.analysis_toolbar.setObjectName("analysis_toolbar")
+        self.addToolBar(self.analysis_toolbar)
+        self.analysis_toolbar.addAction(self.act_forensic_texture)
+        self.analysis_toolbar.addAction(self.act_morphological)
 
     def _thumbnail_divider_moved(self, position, index):
         self._thumb_panel_height = self.center_splitter.sizes()[1]
@@ -1963,7 +1988,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             return
 
         self.act_original.setChecked(False)
-        state = {key: getattr(self, key) for key in ("color_balance", "smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness", "brightness")}
+        state = {key: getattr(self, key) for key in ("color_balance", "smoothing", "contrast", "saturation", "inverted", "black_point", "white_point", "gamma", "sharpness", "brightness", "percentile_stretch", "percentile_low", "percentile_high", "auto_enhance_mars")}
         image = apply_adjustments(self.original_image, state)
         self._annotation_base = pil_to_qimage(image)
         self._show_annotations(fit=fit)
@@ -1976,6 +2001,93 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         )
 
     # ---------- Image operations ----------
+
+    def _toggle_auto_enhance_mars(self):
+        if self.original_image is None:
+            return
+        enabled = self.act_auto_enhance_mars.isChecked()
+        self._flush_inline_adjustments()
+        self.auto_enhance_mars = enabled
+        self._render_current(fit=False)
+        self._commit_adjustments()
+
+    def _export_auto_enhance_stages(self):
+        if self.original_image is None:
+            return
+        folder = QFileDialog.getExistingDirectory(self,'Pasta para os estágios (será criada uma subpasta nova)')
+        if not folder:
+            return
+        try:
+            from image_adjustments import save_auto_enhance_stages
+            destination = save_auto_enhance_stages(self.original_image,folder)
+            QMessageBox.information(self,'Etapas exportadas',str(destination))
+        except Exception as exc:
+            QMessageBox.warning(self,'Erro ao exportar etapas',str(exc))
+
+    def _toggle_percentile_stretch(self):
+        if self.original_image is None:
+            return
+        enabled = self.act_percentile_stretch.isChecked()
+        self._flush_inline_adjustments()
+        self.percentile_stretch = enabled
+        self._render_current(fit=False)
+        self._commit_adjustments()
+
+    def _open_forensic_texture(self):
+        if self.original_image is None or self.current_path is None:
+            QMessageBox.information(self, "Forensic Texture Analysis", "Abra uma imagem primeiro.")
+            return
+        try:
+            from forensic_texture_ui import ForensicTextureDialog
+        except ImportError as exc:
+            QMessageBox.warning(self, "Dependências da análise", f"Instale as dependências de requirements.txt.\n\n{exc}")
+            return
+        dialog = ForensicTextureDialog(self.original_image.copy(), self.current_path, self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _open_morphological(self):
+        if self.original_image is None:
+            QMessageBox.information(self, "Morphological Analysis", "Marque primeiro a área que deseja analisar.")
+            return
+        try:
+            from morphological_region_ui import marked_regions, MorphologicalRegionDialog
+        except ImportError as exc:
+            QMessageBox.warning(self, "Dependências da análise", f"Instale as dependências de requirements.txt.\n\n{exc}")
+            return
+        choices,active_index = marked_regions(self)
+        if not choices:
+            QMessageBox.information(self, "Morphological Analysis", "Marque primeiro a área que deseja analisar.")
+            return
+        dialog = MorphologicalRegionDialog(self.original_image,choices,active_index,self.rotation,self)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def _open_magic_wand(self):
+        if self.original_image is None or self._annotation_document is None:
+            QMessageBox.information(self, "Varinha mágica", "Abra uma imagem primeiro.")
+            return
+        try:
+            from magic_wand_ui import MagicWandDialog
+        except ImportError as exc:
+            QMessageBox.warning(self, "Dependências da seleção", f"Instale as dependências de requirements.txt.\n\n{exc}")
+            return
+        dialog = MagicWandDialog(self.original_image,self.rotation,self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.annotation is not None:
+            import copy
+            self._flush_inline_adjustments()
+            state = copy.deepcopy(self._annotation_document.state)
+            drawing = copy.deepcopy(dialog.annotation)
+            drawing.update(color=self._annotation_document.pen['color'],width=self._annotation_document.pen['width'])
+            state['drawings'].append(drawing)
+            self._annotation_document.commit(state)
+            action = next(a for a in self._drawing_tools.actions() if a.data() == 'select')
+            action.setChecked(True)
+            self._drawing_tool_changed(action,render=False)
+            self._selected_drawing = len(state['drawings'])-1
+            self._show_annotations()
+            self._persist_annotations()
+        dialog.deleteLater()
     def _adjust_detail(self, kind):
         if self.original_image is None:
             return
@@ -2064,6 +2176,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self._flush_inline_adjustments()
         if self.original_image is None:
             return
+        self.percentile_stretch,self.percentile_low,self.percentile_high = False,1,99
+        self.auto_enhance_mars = False
         self.contrast = 1.0
         self.saturation = 1.0
         self.rotation = 0
@@ -2116,6 +2230,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         menu.addAction(self.act_levels)
         menu.addAction(self.act_sharpen)
         menu.addAction(self.act_brightness)
+        menu.addAction(self.act_percentile_stretch)
+        menu.addAction(self.act_auto_enhance_mars)
+        menu.addAction(self.act_export_auto_stages)
         menu.addAction(self.act_smooth)
         menu.addSeparator()
         menu.addAction(self.act_contrast_up)
