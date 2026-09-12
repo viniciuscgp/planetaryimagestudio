@@ -48,7 +48,7 @@ class SolAnnotationTests(unittest.TestCase):
 
     def wait_summaries(self, window):
         deadline = time.monotonic() + 5
-        while window._sol_summary_jobs and time.monotonic() < deadline:
+        while (window._sol_summary_jobs or window._filter_jobs) and time.monotonic() < deadline:
             self.app.processEvents()
             time.sleep(0.005)
         self.app.processEvents()

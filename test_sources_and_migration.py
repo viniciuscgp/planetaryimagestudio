@@ -65,6 +65,13 @@ class SourceTests(unittest.TestCase):
             self.assertIsNone(window._download_worker)
             self.assertEqual(window.metadata_client.lookup("moon.png", 0)["filename"], "moon.png")
             window.sol_list.setCurrentRow(1)
+            from PySide6.QtTest import QTest
+            for _ in range(400):
+                self.app.processEvents()
+                if not window._filter_jobs:
+                    break
+                QTest.qWait(5)
+            self.assertFalse(window._filter_jobs)
             self.assertEqual(window.current_path, subfolder / "crater.png")
             window._adjust_contrast(0.2)
             self.assertTrue(Path(str(window.current_path) + ".annotations.json").exists())

@@ -44,7 +44,9 @@ Teste específico: `python -m unittest test_morphological_region -v`.
 
 ## Forensic Texture Analysis
 
-Abra uma imagem e use **Análise → Forensic Texture Analysis**, também disponível na barra **Análise**. A ferramenta abre uma janela própria, com uma cópia do original antes dos ajustes e marcações. Fechá-la preserva os filtros, desenhos, zoom e histórico do visualizador. Não há escrita no original, IA generativa, super-resolution ou deconvolução.
+Abra uma imagem e use **Análise → Forensic Texture Analysis**, também disponível na barra **Análise**. A ferramenta abre um painel à direita e usa o visualizador principal. A medição usa uma cópia do original limpo (após orientação EXIF), enquanto as camadas aparecem sobre a imagem com os ajustes atuais. Zoom, navegação, rotação, comparação com original e desenho continuam disponíveis; desenhos ficam acima das camadas. Use **Navegar** e clique sem arrastar para inspecionar uma região. Os cliques são convertidos da imagem rotacionada para as coordenadas da imagem base.
+
+Os controles, resumo, detalhes técnicos, dez regiões e exportações ficam no painel com rolagem vertical. Fechar o painel oculta as camadas e cancela uma análise em andamento, sem alterar filtros, desenhos ou histórico. Trocar de imagem limpa os resultados e cancela o processamento anterior; clique em **Analisar** para a nova foto. Resultados atrasados não são aplicados à imagem nova. Ajustar filtros não recalcula as métricas. As camadas são apenas de exibição: a cópia/exportação normal da imagem permanece sem elas; as exportações específicas do painel mantêm os mapas e sobreposições sobre o original. Não há escrita no original, IA generativa, super-resolution ou deconvolução.
 
 Selecione **32×32, 64×64 e/ou 128×128** e clique em **Analisar**. O processamento é offline, em segundo plano, com cancelamento. Janelas têm passo de metade do tamanho, incluem as últimas linhas/colunas e são recortadas quando a imagem é menor que a janela. As coordenadas são do original orientado por EXIF, com origem `(0, 0)` no canto superior esquerdo; rotações manuais do visualizador não são aplicadas à análise.
 
@@ -325,6 +327,10 @@ Acima das miniaturas, os filtros compactos podem ser combinados:
 - **Coloridas**: detecta cores por amostragem dos pixels do arquivo original; uma imagem RGB cujos canais são iguais continua sendo considerada preto e branco. É uma classificação visual aproximada e não depende da cor de desenhos sobrepostos.
 - **Editadas**: encontra marcações, textos, contraste, saturação, rotação e inversão presentes no estado atual ou no histórico salvo de anotações. Apenas escolher outra cor/espessura de lápis não conta como edição.
 - **Pasta / Missão**: limita a busca à pasta/SOL atual ou pesquisa todos os SOLs/observações da missão em uso. Para encontrar todo o trabalho já marcado, selecione **Editadas** e **Missão**.
+
+As opções **Coloridas**, **Editadas** e **Pasta / Missão** são salvas ao mudar e restauradas ao reabrir o aplicativo, reaplicando a busca mesmo quando a sessão anterior terminou sem resultados.
+
+Ao trocar de SOL/pasta ou alterar os filtros, as miniaturas antigas são limpas imediatamente. A faixa inferior mostra **Carregando…**, uma barra animada e a contagem de arquivos verificados; depois mostra o progresso das miniaturas. As trocas de pasta após abrir o aplicativo são lidas em segundo plano, mesmo sem filtros. Uma busca vazia mostra uma mensagem explícita. Atualizações de downloads em segundo plano preservam a lista que está sendo usada.
 
 A busca ocorre em segundo plano, mostra a quantidade verificada e preserva a imagem selecionada e o zoom quando ela atende aos filtros. Clicar em outra pasta na lateral volta ao escopo Pasta. Os filtros não alteram os originais nem restringem os downloads. Arquivos ilegíveis não entram nos resultados de classificação.
 

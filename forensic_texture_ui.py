@@ -5,11 +5,12 @@ import threading
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QEvent, QPointF
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
     QGraphicsScene, QGraphicsView, QHBoxLayout, QLabel, QListWidget, QMessageBox,
-    QProgressBar, QPushButton, QSlider, QSplitter, QTextBrowser, QToolButton, QVBoxLayout, QWidget)
+    QProgressBar, QPushButton, QSlider, QSplitter, QTextBrowser, QToolButton, QVBoxLayout, QWidget,
+    QDockWidget, QScrollArea, QGridLayout)
 
 from forensic_texture_analyzer import ForensicTextureAnalyzer, METRICS, colorize, write_png
 from forensic_texture_presentation import FRIENDLY_METRICS, RegionPresentation, friendly_value
@@ -108,9 +109,32 @@ class TextureView(QGraphicsView):
         super().mouseReleaseEvent(event)
 
 
+class MainTextureView:
+    """Navigation adapter: the dock never creates a second image canvas."""
+    def __init__(self,host):
+        self.host = host
+
+    def display(self,*args):
+        self.host._display_image_version(fit=False)
+
+    def centerOn(self,x,y):
+        from annotation_editing import image_transform
+        point = image_transform(self.host.rotation,*self.host.original_image.size).map(QPointF(x,y))
+        self.host.image_view.centerOn(point)
+
+    def sceneRect(self):
+        return self.host.image_view.sceneRect()
+
+    def fitInView(self,*args):
+        self.host.image_view.fit_image()
+
+
 class ForensicTextureDialog(QDialog):
-    def __init__(self, image, source_path, parent=None):
+    def __init__(self, image, source_path, parent=None, host=None):
         super().__init__(parent)
+        self.host = host
+        if host is not None:
+            self.setWindowFlags(Qt.WindowType.Widget)
         self.source_path = Path(source_path)
         self.image = np.array(image.convert('RGB'), dtype=np.uint8, copy=True)
         self.result = None
@@ -126,6 +150,8 @@ class ForensicTextureDialog(QDialog):
                         'Iluminação, foco, distância, rocha e compressão também produzem anomalias.\n'
                         'Fonte: cópia do original, antes dos ajustes. Coordenadas X/Y começam em 0, após orientação EXIF.')
         notice.setWordWrap(True)
+        if host is not None:
+            notice.setText(notice.text()+'\nAjustes alteram apenas a exibição. Use Navegar e clique sem arrastar para inspecionar.')
         layout.addWidget(notice)
         row = QHBoxLayout()
         row.addWidget(QLabel('Janelas (multiescala):'))
@@ -232,9 +258,10 @@ class ForensicTextureDialog(QDialog):
             self.metrics[key] = check
         layout.addLayout(row)
         splitter = QSplitter()
-        self.view = TextureView()
-        self.view.clicked.connect(self.inspect_pixel)
-        splitter.addWidget(self.view)
+        self.view = MainTextureView(host) if host is not None else TextureView()
+        if host is None:
+            self.view.clicked.connect(self.inspect_pixel)
+            splitter.addWidget(self.view)
         side = QWidget()
         side_layout = QVBoxLayout(side)
         side_layout.addWidget(QLabel('<h3>Resumo da análise</h3>'))
@@ -258,9 +285,16 @@ class ForensicTextureDialog(QDialog):
         self.top.currentRowChanged.connect(self.inspect_top)
         self.top.setMaximumHeight(145)
         side_layout.addWidget(self.top,1)
-        splitter.addWidget(side)
-        splitter.setSizes([750,450])
-        layout.addWidget(splitter,1)
+        if host is None:
+            splitter.addWidget(side)
+            splitter.setSizes([750,450])
+            layout.addWidget(splitter,1)
+        else:
+            splitter.deleteLater()
+            layout.insertWidget(2,side)
+            self.summary.setMinimumHeight(180)
+            self.details.setMinimumHeight(160)
+            self.legend.setWordWrap(True)
         row = QHBoxLayout()
         self.exports = [self.highlight_save, self.peak_button]
         for title,kind in [('Exportar CSV','csv'),('Salvar heatmap puro','heatmap'),
@@ -272,11 +306,40 @@ class ForensicTextureDialog(QDialog):
             self.exports.append(button)
             row.addWidget(button)
         layout.addLayout(row)
-        self.view.display(self.image)
+        if host is None:
+            self.view.display(self.image)
+        else:
+            # Reflow the former wide dialog rows into a scrollable narrow panel.
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                row = item.layout()
+                if isinstance(row,QHBoxLayout):
+                    widgets = []
+                    while row.count():
+                        widgets.append(row.takeAt(0).widget())
+                    grid = QGridLayout()
+                    if self.run_button in widgets:
+                        grid.addWidget(widgets[0],0,0,1,3)
+                        for n,(_,check) in enumerate(self.sizes):
+                            grid.addWidget(check,1,n)
+                        grid.addWidget(self.run_button,2,0,1,2)
+                        grid.addWidget(self.cancel_button,2,2)
+                        grid.addWidget(self.progress,3,0,1,3)
+                    else:
+                        for n,widget in enumerate(widgets):
+                            if widget is not None:
+                                grid.addWidget(widget,n,0)
+                    row.addLayout(grid)
+            for label in self.findChildren(QLabel):
+                label.setWordWrap(True)
+            for choice in self.findChildren(QComboBox):
+                choice.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+                choice.setMinimumContentsLength(10)
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.view.fitInView(self.view.sceneRect(),Qt.AspectRatioMode.KeepAspectRatio)
+        if self.host is None:
+            self.view.fitInView(self.view.sceneRect(),Qt.AspectRatioMode.KeepAspectRatio)
 
     def start_analysis(self):
         sizes = [size for size,check in self.sizes if check.isChecked()]
@@ -292,9 +355,10 @@ class ForensicTextureDialog(QDialog):
         for _,check in self.sizes:
             check.setEnabled(False)
         self.worker = AnalysisWorker(self.image,sizes,self)
-        self.worker.completed.connect(self.analysis_done)
+        source = self.image
+        self.worker.completed.connect(lambda result: self.analysis_done(result) if self.image is source else None)
         self.worker.failed.connect(lambda message: QMessageBox.warning(self,'Falha na análise',message))
-        self.worker.progress.connect(self.update_progress)
+        self.worker.progress.connect(lambda done,total: self.update_progress(done,total) if self.image is source else None)
         self.worker.finished.connect(self.worker_finished)
         self.worker.start()
 
@@ -368,9 +432,9 @@ class ForensicTextureDialog(QDialog):
         maps = self.result.maps if size is None else self.result.scale_maps[size]
         return maps[self.metric_choice.currentData()]
 
-    def overlay_image(self):
+    def overlay_image(self,base=None):
         alpha = self.opacity.value()/100
-        return cv2.addWeighted(self.image,1-alpha,colorize(self.current_map()),alpha,0)
+        return cv2.addWeighted(self.image if base is None else base,1-alpha,colorize(self.current_map()),alpha,0)
 
     def highlight_image(self, base=None):
         if self.highlight_mode.currentIndex() == 0:
@@ -388,7 +452,7 @@ class ForensicTextureDialog(QDialog):
             cv2.putText(output,str(i),(x+2,y+min(18,h-1)),cv2.FONT_HERSHEY_SIMPLEX,.5,(255,255,255),1)
         return output
 
-    def refresh(self,*args):
+    def refresh(self,*args,base=None,display=True):
         relative = self.highlight_mode.currentIndex() == 0
         self.legend.setText(
             'Vermelho: maiores valores desta imagem.\nCruz branca: ponto de maior valor no mapa.'
@@ -401,10 +465,10 @@ class ForensicTextureDialog(QDialog):
         self.opacity_label.setText(f'{self.opacity.value()}%')
         self.highlight_threshold_label.setText(f'{self.highlight_threshold.value()}%')
         self.highlight_opacity_label.setText(f'{self.highlight_opacity.value()}%')
-        output = self.image
+        output = self.image if base is None else base
         if self.result:
             if self.overlay.isChecked():
-                output = self.overlay_image()
+                output = self.overlay_image(output)
             if self.highlight.isChecked():
                 output = self.highlight_image(output)
                 scores = self.current_map()
@@ -440,7 +504,9 @@ class ForensicTextureDialog(QDialog):
                     output = output.copy()
                     r = self.selected
                     cv2.rectangle(output,(r['x'],r['y']),(r['x']+r['width']-1,r['y']+r['height']-1),(255,0,255),2)
-        self.view.display(output)
+        if display:
+            self.view.display(output)
+        return output
 
     def inspect_peak(self):
         if self.result is None:
@@ -535,3 +601,86 @@ class ForensicTextureDialog(QDialog):
             QMessageBox.information(self,'Exportação concluída',str(target))
         except (OSError,ValueError,cv2.error) as exc:
             QMessageBox.warning(self,'Erro ao exportar',str(exc))
+
+
+class ForensicTextureDock(QDockWidget):
+    """Live controls with immutable source analysis and display-only composition."""
+    def __init__(self,host):
+        super().__init__('Forensic Texture Analysis',host)
+        self.host = host
+        self.setObjectName('forensic_texture_dock')
+        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.source = host.original_image
+        self.panel = ForensicTextureDialog(self.source,host.current_path,self,host=host)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.panel)
+        self.setWidget(scroll)
+        self.setMinimumWidth(360)
+        self._press = None
+        host.image_view.viewport().installEventFilter(self)
+        self.visibilityChanged.connect(self.visibility_changed)
+
+    def visibility_changed(self,visible):
+        if not visible:
+            self.panel.cancel_analysis()
+        self.host._display_image_version(fit=False)
+
+    def sync_source(self):
+        if self.source is self.host.original_image:
+            return
+        self.source = self.host.original_image
+        panel = self.panel
+        panel.cancel_analysis()
+        panel.image = (np.array(self.source.convert('RGB'),copy=True) if self.source is not None
+                       else np.zeros((1,1,3),np.uint8))
+        panel.source_path = Path(self.host.current_path) if self.host.current_path else Path('sem_imagem')
+        panel.result = panel.presentation = panel.selected = panel.clicked_point = None
+        panel.top.clear()
+        panel.scale_choice.blockSignals(True)
+        panel.scale_choice.clear();panel.scale_choice.addItem('Multiescala',None)
+        panel.scale_choice.blockSignals(False)
+        panel.summary.setPlainText('Imagem alterada. Clique em Analisar para medir a nova imagem base.')
+        panel.details.clear()
+        panel.progress.setValue(0)
+        panel.highlight_status.setText('Sem análise para a imagem atual.')
+        for button in panel.exports:
+            button.setEnabled(False)
+        panel.setEnabled(self.source is not None)
+
+    def render(self,base):
+        self.sync_source()
+        if not self.isVisible() or self.panel.result is None:
+            return base
+        # Work before display rotation, in the same coordinates as the raw map.
+        qimage = base.convertToFormat(QImage.Format.Format_RGB888)
+        rgb = np.frombuffer(qimage.constBits(),np.uint8).reshape(qimage.height(),qimage.bytesPerLine())
+        rgb = rgb[:,:qimage.width()*3].reshape(qimage.height(),qimage.width(),3).copy()
+        output = np.ascontiguousarray(self.panel.refresh(base=rgb,display=False))
+        result = QImage(output.data,output.shape[1],output.shape[0],output.strides[0],QImage.Format.Format_RGB888).copy()
+        if base.hasAlphaChannel():
+            result = result.convertToFormat(QImage.Format.Format_ARGB32)
+            result.setAlphaChannel(base.convertToFormat(QImage.Format.Format_Alpha8))
+        return result
+
+    def inspect_scene_point(self,point):
+        from annotation_editing import image_transform
+        if not self.isVisible() or self.panel.result is None or self.source is not self.host.original_image:
+            return
+        inverse,_ = image_transform(self.host.rotation,*self.source.size).inverted()
+        raw = inverse.map(point)
+        if 0 <= raw.x() < self.source.width and 0 <= raw.y() < self.source.height:
+            self.panel.inspect_pixel(int(raw.x()),int(raw.y()))
+
+    def eventFilter(self,watched,event):
+        view = self.host.image_view
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._press = (event.position().toPoint() if event.button() == Qt.MouseButton.LeftButton
+                           and view.drawing_tool == 'pan' else None)
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            if (event.button() == Qt.MouseButton.LeftButton and self._press is not None
+                    and not view._drawing and (event.position().toPoint()-self._press).manhattanLength() < 4):
+                self.inspect_scene_point(view.mapToScene(event.position().toPoint()))
+            self._press = None
+        return False

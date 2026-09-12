@@ -293,6 +293,8 @@ class TextureIntegrationTests(unittest.TestCase):
         import copy
         path = self.image(1,'texture.png')
         window = self.window()
+        window.show()
+        self.app.processEvents()
         window._adjust_contrast(.3)
         window._rotate(90)
         window.image_view.scale(2,2)
@@ -303,19 +305,98 @@ class TextureIntegrationTests(unittest.TestCase):
         source = path.read_bytes()
         self.assertIn(window.act_forensic_texture,window.analysis_menu.actions())
         self.assertIn(window.act_forensic_texture,window.analysis_toolbar.actions())
-        def exercise(dialog):
-            dialog.analysis_done(ForensicTextureAnalyzer((32,)).analyze(dialog.image))
-            dialog.opacity.setValue(80)
-            dialog.inspect_pixel(5,5)
-            dialog.overlay.setChecked(False)
-            return 0
-        with patch.object(ForensicTextureDialog,'exec',exercise):
-            window.act_forensic_texture.trigger()
+        window.act_forensic_texture.trigger()
+        dock = window._forensic_dock
+        dialog = dock.panel
+        self.assertTrue(dock.isVisible())
+        self.assertFalse(dialog.isWindow())
+        self.assertFalse(hasattr(dialog.view,'viewport'))
+        dialog.analysis_done(ForensicTextureAnalyzer((32,)).analyze(dialog.image))
+        dialog.overlay.setChecked(True)
+        dialog.highlight.setChecked(False)
+        dialog.opacity.setValue(80)
+        self.assertNotEqual(window.image_view._pixmap_item.pixmap().toImage(),pixels)
+        from annotation_editing import image_transform
+        from PySide6.QtCore import QPointF
+        dock.inspect_scene_point(image_transform(window.rotation,*window.original_image.size).map(QPointF(5.5,5.5)))
+        self.assertEqual(dialog.clicked_point,(5,5))
+        measured = dialog.result.maps['score'].copy()
+        window._adjust_saturation(.2)
+        np.testing.assert_array_equal(dialog.result.maps['score'],measured)
+        np.testing.assert_array_equal(dialog.image,np.asarray(window.original_image))
+        window._undo_annotation()
+        dock.hide()
+        self.assertEqual(window.image_view._pixmap_item.pixmap().toImage().convertToFormat(pixels.format()),pixels)
         self.assertEqual(window.original_image.tobytes(),original)
         self.assertEqual(window.processed_qimage,pixels)
         self.assertEqual(window._annotation_document.state,state)
         self.assertEqual(window.image_view.transform(),transform)
         self.assertEqual(path.read_bytes(),source)
+
+    def test_navigation_cancels_worker_and_discards_stale_result(self):
+        self.image(1,'a.png');second = self.image(1,'b.png')
+        window = self.window();window.show();self.app.processEvents()
+        window._open_forensic_texture();dock = window._forensic_dock;panel = dock.panel
+        started = threading.Event();release = threading.Event()
+        stale = ForensicTextureAnalyzer((32,)).analyze(panel.image)
+        def delayed(analyzer,image,progress,cancel):
+            started.set();release.wait(2)
+            return stale
+        with patch.object(ForensicTextureAnalyzer,'analyze',delayed):
+            panel.start_analysis()
+            self.assertTrue(started.wait(1))
+            window._load_image(second)
+            self.assertIsNone(panel.result)
+            self.assertTrue(panel.worker.cancel.is_set())
+            panel.worker.completed.emit(stale)
+            self.assertIsNone(panel.result)
+            release.set()
+            for _ in range(100):
+                QTest.qWait(5)
+                if panel.worker is None:
+                    break
+        self.assertIsNone(panel.worker)
+        self.assertIsNone(panel.result)
+        self.assertEqual(panel.source_path,second)
+        self.assertTrue(panel.run_button.isEnabled())
+
+    def test_dock_click_does_not_intercept_drawing_and_preserves_zoom(self):
+        self.image(1,'a.png');window = self.window();window.show();self.app.processEvents()
+        window._open_forensic_texture();panel = window._forensic_dock.panel
+        panel.analysis_done(ForensicTextureAnalyzer((32,)).analyze(panel.image))
+        from PySide6.QtCore import QPointF,Qt
+        window.image_view.scale(2,2);before = window.image_view.transform()
+        panel.clicked_point = None
+        window.image_view.drawing_tool = 'pencil'
+        point = window.image_view.mapFromScene(QPointF(20,20))
+        QTest.mouseClick(window.image_view.viewport(),Qt.MouseButton.LeftButton,pos=point)
+        self.assertIsNone(panel.clicked_point)
+        self.assertTrue(window._annotation_document.state['drawings'])
+        window.image_view.drawing_tool = 'pan'
+        point = window.image_view.mapFromScene(QPointF(60,40))
+        QTest.mouseClick(window.image_view.viewport(),Qt.MouseButton.LeftButton,pos=point)
+        self.assertEqual(panel.clicked_point,(60,40))
+        self.assertEqual(window.image_view.transform(),before)
+
+    def test_alpha_and_annotation_draw_order_and_original_comparison(self):
+        path = self.image(1,'alpha.png')
+        Image.new('RGBA',(80,60),(120,70,30,120)).save(path)
+        window = self.window();window.show();self.app.processEvents();window._open_forensic_texture()
+        dock = window._forensic_dock;panel = dock.panel
+        panel.analysis_done(ForensicTextureAnalyzer((32,)).analyze(panel.image))
+        panel.highlight.setChecked(False);panel.overlay.setChecked(True);panel.opacity.setValue(100)
+        rendered = dock.render(window._annotation_base)
+        self.assertEqual(rendered.pixelColor(20,20).alpha(),120)
+        state = dict(window._annotation_document.state)
+        state['drawings'] = [dict(kind='rectangle',points=[[10,10],[40,40]],color='#ff00ff',width=4)]
+        window._annotation_document.commit(state);window._show_annotations()
+        pixel = window.image_view._pixmap_item.pixmap().toImage().pixelColor(10,20)
+        self.assertGreater(pixel.red(),200);self.assertGreater(pixel.blue(),200)
+        panel.overlay.setChecked(False)
+        clean = window.processed_qimage.copy()
+        window.act_original.setChecked(True);window._display_image_version()
+        self.assertEqual(window.processed_qimage,clean)
+        self.assertNotEqual(window.image_view._pixmap_item.pixmap().toImage().pixelColor(10,20),pixel)
 
 
 if __name__ == '__main__':

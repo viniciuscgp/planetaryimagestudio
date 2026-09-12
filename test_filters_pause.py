@@ -1,5 +1,6 @@
 import copy
 import json
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import Mock,patch
@@ -73,6 +74,43 @@ class FilterPauseTests(unittest.TestCase):
         self.assertEqual(window.thumb_list.count(),0)
         window.filter_edited.setChecked(False);self.wait_filters(window)
         self.assertEqual(window.thumb_list.count(),2)
+
+    def test_sol_switch_clears_thumbnails_before_slow_scan_finishes(self):
+        first=self.image(1,'first.png');self.image(2,'second.png')
+        window=self.window();window.show();self.app.processEvents()
+        self.assertEqual(window.thumb_list.count(),1)
+        started=threading.Event();release=threading.Event()
+        from catalog import list_images
+        def slow(folder,cancel=None):
+            started.set();release.wait(2)
+            return list_images(folder,cancel)
+        with patch('image_filters.list_images',side_effect=slow):
+            window.sol_list.setCurrentRow(1)
+            self.assertTrue(started.wait(1))
+            self.assertEqual(window.thumb_list.count(),0)
+            self.assertEqual(window._thumb_queue,[])
+            self.assertTrue(window.thumbnail_loading.isVisible())
+            self.assertEqual(window.thumbnail_loading_progress.maximum(),0)
+            self.assertIn('SOL1',window.thumbnail_loading_label.text())
+            token=window._filter_token
+            window._image_filter_progress(token,300)
+            self.assertIn('300',window.thumbnail_loading_label.text())
+            window._image_filter_done(token-1,[])
+            self.assertTrue(window.thumbnail_loading.isVisible())
+            release.set();self.wait_filters(window)
+        self.assertEqual(window.current_path,first)
+        self.assertEqual(window.thumb_list.count(),1)
+        window._load_thumb_batch()
+        self.assertFalse(window.thumbnail_loading.isVisible())
+
+    def test_filtered_empty_result_replaces_busy_indicator(self):
+        self.image(1,'a.png');window=self.window();window.show();self.app.processEvents()
+        window.filter_edited.setChecked(True)
+        self.assertEqual(window.thumb_list.count(),0)
+        self.wait_filters(window)
+        self.assertTrue(window.thumbnail_loading.isVisible())
+        self.assertEqual(window.thumbnail_loading_progress.maximum(),1)
+        self.assertIn('Nenhuma imagem',window.thumbnail_loading_label.text())
 
     def test_cancelled_filter_cannot_replace_new_mission_results(self):
         self.image(1,'old.png');window=self.window()

@@ -469,6 +469,7 @@ class AnnotationWindowMixin(AnnotationEditingMixin):
         if self._draft_drawing:
             drawings = drawings + [self._draft_drawing]
         self.processed_qimage = composite_image(self._annotation_base, drawings, self.rotation)
+        self._forensic_drawings = drawings
         self._display_image_version(fit=fit)
         self._update_annotation_handles()
 

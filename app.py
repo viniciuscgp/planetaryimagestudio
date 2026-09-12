@@ -1182,6 +1182,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
                         f"Último arquivo: {self._download_current_file}"
                     )
 
+        self._restore_image_filters()
+
     def _build_state(self, pending_resume: bool | None = None) -> dict[str, Any]:
         running = (
             self._download_thread is not None
@@ -1211,6 +1213,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             "toolbar_layout": bytes(self.saveState(1)).hex(),
             "toolbar_text": self.act_toolbar_text.isChecked(),
             "auto_zoom": self.act_auto_zoom.isChecked(),
+            "image_filters": self._image_filter_state(),
             "splitter_sizes": [int(v) for v in sizes],
             "thumbnail_panel_height": self._thumb_panel_height,
             "download_panel_open": bool(self._download_panel_open),
@@ -1847,6 +1850,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             self._clear_annotations()
             self.thumb_list.clear()
             self.image_view.set_pixmap(QPixmap())
+            if getattr(self,'_forensic_dock',None) is not None:
+                self._forensic_dock.sync_source()
             message = "Nenhuma pasta SOLxxxx" if getattr(self.source, "uses_sols", self.source.supports_downloads) else "Nenhuma imagem ou pasta com imagens"
             self.statusBar().showMessage(f"{message} encontrada em {self.root}")
             return
@@ -1868,7 +1873,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.filter_scope.blockSignals(True)
         self.filter_scope.setCurrentIndex(0)
         self.filter_scope.blockSignals(False)
-        if self._filters_active():
+        if self._filters_active() or getattr(self,'_state_ready',False):
             self._request_image_filter()
             return
         self.filter_count.setText("")
@@ -1912,6 +1917,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
                 self.processed_qimage = None
                 self._clear_annotations()
                 self.image_view.set_pixmap(QPixmap())
+                if getattr(self,'_forensic_dock',None) is not None:
+                    self._forensic_dock.sync_source()
                 self.statusBar().showMessage(f"{current.text()}: não foi possível abrir nenhuma imagem")
         else:
             self.current_path = None
@@ -1919,6 +1926,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             self.processed_qimage = None
             self._clear_annotations()
             self.image_view.set_pixmap(QPixmap())
+            if getattr(self,'_forensic_dock',None) is not None:
+                self._forensic_dock.sync_source()
             self.statusBar().showMessage(f"{current.text()}: nenhuma imagem encontrada")
 
     def _load_thumb_batch(self) -> None:
@@ -1927,6 +1936,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         for _ in range(batch):
             if not self._thumb_queue:
                 self._thumb_timer.stop()
+                self._update_thumbnail_loading()
                 return
             item, path = self._thumb_queue.pop(0)
             self._highlight_thumbnail(item, path)
@@ -1939,6 +1949,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             image = reader.read()
             if not image.isNull():
                 item.setIcon(QIcon(QPixmap.fromImage(image)))
+        self._update_thumbnail_loading()
 
     def _thumb_changed(self, current: QListWidgetItem | None, previous: QListWidgetItem | None) -> None:
         if current is None:
@@ -2038,13 +2049,20 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             QMessageBox.information(self, "Forensic Texture Analysis", "Abra uma imagem primeiro.")
             return
         try:
-            from forensic_texture_ui import ForensicTextureDialog
+            from forensic_texture_ui import ForensicTextureDock
         except ImportError as exc:
             QMessageBox.warning(self, "Dependências da análise", f"Instale as dependências de requirements.txt.\n\n{exc}")
             return
-        dialog = ForensicTextureDialog(self.original_image.copy(), self.current_path, self)
-        dialog.exec()
-        dialog.deleteLater()
+        dock = getattr(self,'_forensic_dock',None)
+        # Opening/reopening the dock must preserve the current zoom.
+        self.image_view._fit_mode = False
+        if dock is None:
+            dock = self._forensic_dock = ForensicTextureDock(self)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea,dock)
+        dock.sync_source()
+        dock.show()
+        dock.raise_()
+        self.resizeDocks([dock],[420],Qt.Orientation.Horizontal)
 
     def _open_morphological(self):
         if self.original_image is None:
@@ -2106,6 +2124,13 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         image = self.processed_qimage
         if self.act_original.isChecked() and self.original_image is not None:
             image = composite_image(pil_to_qimage(self.original_image), [], self.rotation)
+        dock = getattr(self,'_forensic_dock',None)
+        if dock is not None:
+            dock.sync_source()
+            if image is not None and self.original_image is not None and dock.isVisible() and dock.panel.result is not None:
+                original = self.act_original.isChecked()
+                base = pil_to_qimage(self.original_image) if original else self._annotation_base
+                image = composite_image(dock.render(base),[] if original else getattr(self,'_forensic_drawings',[]),self.rotation)
         if image is not None:
             self.image_view.set_pixmap(QPixmap.fromImage(image), fit=fit)
 
@@ -2309,7 +2334,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
 
     def _background_tasks_running(self):
         thread = self._download_thread
+        dock = getattr(self,'_forensic_dock',None)
         return bool((thread is not None and thread.isRunning())
+                    or (dock is not None and dock.panel.worker is not None)
                     or self.thread_pool.activeThreadCount()
                     or self._filter_pool.activeThreadCount())
 
@@ -2332,6 +2359,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
                 event.ignore()
                 return
             self._closing = True
+            dock = getattr(self,'_forensic_dock',None)
+            if dock is not None:
+                dock.panel.cancel_analysis()
             worker, thread = self._download_worker, self._download_thread
             running = thread is not None and thread.isRunning()
             self._shutdown_pending_resume = bool(running or self._download_pending_resume)

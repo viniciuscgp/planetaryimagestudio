@@ -41,4 +41,33 @@ class SessionRestoreTests(unittest.TestCase):
         reopened=MainWindow(self.root,load_app_state());self.addCleanup(reopened.close)
         self.assertEqual(reopened.current_path,selected)
 
+    def test_color_filter_is_saved_immediately_and_applied_after_reopen(self):
+        self.make_images(10,2)
+        gray=self.root/'SOL10'/'01.png'
+        Image.new('RGB',(40,30),'gray').save(gray)
+        w=MainWindow(self.root,{'source':'curiosity'})
+        self.addCleanup(w.close)
+        w.filter_color.setChecked(True)
+        self.assertTrue(load_app_state()['image_filters']['color'])
+        self.settle();w.close();self.settle()
+        reopened=MainWindow(self.root,load_app_state());self.addCleanup(reopened.close)
+        self.settle()
+        self.assertTrue(reopened.filter_color.isChecked())
+        self.assertEqual([p.name for p in reopened.current_images],['00.png'])
+        reopened.filter_color.setChecked(False);self.settle()
+        self.assertFalse(load_app_state()['image_filters']['color'])
+        self.assertEqual(len(reopened.current_images),2)
+
+    def test_empty_edited_filter_and_mission_scope_survive_reopen(self):
+        self.make_images(10,1);self.make_images(20,1)
+        w=MainWindow(self.root,{'source':'curiosity'});self.addCleanup(w.close)
+        w.filter_edited.setChecked(True);w.filter_scope.setCurrentIndex(1)
+        self.settle();self.assertEqual(w.current_images,[])
+        w.close();self.settle()
+        reopened=MainWindow(self.root,load_app_state());self.addCleanup(reopened.close)
+        self.settle()
+        self.assertTrue(reopened.filter_edited.isChecked())
+        self.assertEqual(reopened.filter_scope.currentIndex(),1)
+        self.assertEqual(reopened.current_images,[])
+
 if __name__=='__main__':unittest.main()

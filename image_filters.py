@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image, ImageChops
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Signal, Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QListWidgetItem, QWidget, QVBoxLayout, QProgressBar
 from catalog import list_images
 
 
@@ -84,9 +84,86 @@ class ImageFiltersMixin:
         self.filter_count=QLabel()
         for widget in (self.filter_color,self.filter_edited,self.filter_scope,self.filter_count):row.addWidget(widget)
         row.addStretch();layout.addLayout(row)
-        self.filter_color.toggled.connect(self._request_image_filter)
-        self.filter_edited.toggled.connect(self._request_image_filter)
-        self.filter_scope.currentIndexChanged.connect(self._request_image_filter)
+        self.filter_color.toggled.connect(self._image_filters_changed)
+        self.filter_edited.toggled.connect(self._image_filters_changed)
+        self.filter_scope.currentIndexChanged.connect(self._image_filters_changed)
+        self.thumbnail_loading = QWidget()
+        loading_layout = QVBoxLayout(self.thumbnail_loading)
+        loading_layout.setContentsMargins(8,4,8,4)
+        loading_layout.setSpacing(3)
+        self.thumbnail_loading_label = QLabel()
+        self.thumbnail_loading_label.setWordWrap(True)
+        self.thumbnail_loading_label.setStyleSheet('font-weight: bold; font-size: 13px;')
+        self.thumbnail_loading_progress = QProgressBar()
+        self.thumbnail_loading_progress.setFixedHeight(14)
+        self.thumbnail_loading_progress.setTextVisible(False)
+        loading_layout.addWidget(self.thumbnail_loading_label)
+        loading_layout.addWidget(self.thumbnail_loading_progress)
+        layout.addWidget(self.thumbnail_loading)
+        self.thumbnail_loading.hide()
+        self._thumbnail_loading_total = 0
+        self._thumbnail_loading_name = 'imagens'
+
+    def _begin_thumbnail_loading(self):
+        self._thumb_timer.stop()
+        self._thumb_queue.clear()
+        self.current_images = []
+        self._filter_results = {}
+        self.thumb_list.blockSignals(True)
+        self.thumb_list.clear()
+        self.thumb_list.blockSignals(False)
+        self._thumbnail_loading_total = 0
+        self._thumbnail_loading_name = (self.source.name if self.filter_scope.currentIndex()==1 else
+                                        self.current_folder.name if self.current_folder else 'imagens')
+        self.thumbnail_loading_label.setText(f'Carregando {self._thumbnail_loading_name} — lendo arquivos…')
+        self.thumbnail_loading_progress.setRange(0,0)
+        self.thumbnail_loading.show()
+
+    def _thumbnail_loading_results(self):
+        self._thumbnail_loading_total = len(self._thumb_queue)
+        if self._thumbnail_loading_total:
+            self.thumbnail_loading_progress.setRange(0,self._thumbnail_loading_total)
+            self._update_thumbnail_loading()
+        else:
+            self.thumbnail_loading_label.setText('Nenhuma imagem encontrada para esta pasta ou estes filtros.')
+            self.thumbnail_loading_progress.setRange(0,1)
+            self.thumbnail_loading_progress.setValue(0)
+
+    def _update_thumbnail_loading(self):
+        if not self._thumbnail_loading_total:
+            return
+        done = self._thumbnail_loading_total-len(self._thumb_queue)
+        self.thumbnail_loading_progress.setValue(max(0,done))
+        self.thumbnail_loading_label.setText(
+            f'{self._thumbnail_loading_name} — miniaturas: {max(0,done)} de {self._thumbnail_loading_total}')
+        if not self._thumb_queue:
+            self._thumbnail_loading_total = 0
+            self.thumbnail_loading.hide()
+
+    def _image_filter_state(self):
+        return dict(color=self.filter_color.isChecked(),edited=self.filter_edited.isChecked(),
+                    scope='mission' if self.filter_scope.currentIndex()==1 else 'folder')
+
+    def _restore_image_filters(self):
+        saved = self._state.get('image_filters',{})
+        if not isinstance(saved,dict):
+            saved = {}
+        was_active = self._filters_active()
+        for widget,value in ((self.filter_color,saved.get('color') is True),
+                             (self.filter_edited,saved.get('edited') is True),
+                             (self.filter_scope,1 if saved.get('scope')=='mission' else 0)):
+            widget.blockSignals(True)
+            if widget is self.filter_scope:
+                widget.setCurrentIndex(value)
+            else:
+                widget.setChecked(value)
+            widget.blockSignals(False)
+        if was_active or self._filters_active():
+            self._request_image_filter()
+
+    def _image_filters_changed(self,*args):
+        self._save_state()
+        self._request_image_filter()
 
     def _filters_active(self):
         return self.filter_color.isChecked() or self.filter_edited.isChecked() or self.filter_scope.currentIndex()==1
@@ -94,11 +171,19 @@ class ImageFiltersMixin:
     def _cancel_image_filters(self):
         self._filter_timer.stop();self._filter_token+=1
         for job in self._filter_jobs.values():job.cancel.set()
+        self._thumbnail_loading_total = 0
+        self.thumbnail_loading.hide()
 
     def _request_image_filter(self,*args,background=False):
         if self._closing:return
+        # A download refresh must not turn a pending explicit folder switch into
+        # an append-only update with no selection when its replacement finishes.
+        if background and self._filter_token in self._filter_jobs and not self._filter_background:
+            background = False
         self._cancel_image_filters()
         self._filter_background = background
+        if not background:
+            self._begin_thumbnail_loading()
         if self.filter_scope.currentIndex()==1:
             folders=self.source.list_collections(self.root)
         else:
@@ -111,7 +196,9 @@ class ImageFiltersMixin:
         self._filter_pool.start(job)
 
     def _image_filter_progress(self,token,count):
-        if token==self._filter_token and not self._filter_background:self.filter_count.setText(f'{count} verificadas…')
+        if token==self._filter_token and not self._filter_background:
+            self.filter_count.setText(f'{count} verificadas…')
+            self.thumbnail_loading_label.setText(f'Carregando {self._thumbnail_loading_name} — {count} arquivos verificados…')
 
     def _image_filter_done(self,token,rows):
         self._filter_jobs.pop(token,None)
@@ -126,6 +213,7 @@ class ImageFiltersMixin:
                 known.add(str(path));self._filter_results[str(path)]=(key,folder)
                 self.current_images.append(path)
                 item=QListWidgetItem(path.name);item.setData(Qt.ItemDataRole.UserRole,str(path));item.setToolTip(str(path))
+                self._highlight_thumbnail(item,path)
                 self.thumb_list.addItem(item);self._thumb_queue.append((item,path))
                 added = True
             if not added:return
@@ -142,17 +230,22 @@ class ImageFiltersMixin:
         chosen=None
         for key,folder,path in rows:
             item=QListWidgetItem(path.name);item.setData(Qt.ItemDataRole.UserRole,str(path))
+            self._highlight_thumbnail(item,path)
             item.setToolTip(str(path));self.thumb_list.addItem(item);self._thumb_queue.append((item,path))
             if path==selected:chosen=item
         if chosen is None and self.thumb_list.count():chosen=self.thumb_list.item(0)
         self.thumb_list.setCurrentItem(chosen)
         self.thumb_list.blockSignals(False)
         self.filter_count.setText(f'{len(rows)} imagens')
+        if not getattr(self,'_filter_background',False):
+            self._thumbnail_loading_results()
         if self._thumb_queue:self._thumb_timer.start(1)
         if chosen:self._thumb_changed(chosen,None)
         else:
             self.current_path=None;self.original_image=None;self.processed_qimage=None
             self._clear_annotations();self.image_view.set_pixmap(QPixmap())
+            if getattr(self,'_forensic_dock',None) is not None:
+                self._forensic_dock.sync_source()
             self.statusBar().showMessage('Nenhuma imagem corresponde aos filtros.')
 
     def _refresh_filters_after_edit(self):
