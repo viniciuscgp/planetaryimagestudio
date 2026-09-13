@@ -234,6 +234,7 @@ class DownloaderWorker(QObject):
         self.root = root.resolve()
         self.only_sol = only_sol
         self.start_sol = start_sol
+        self.restore_paths = None
         self._stop_event = threading.Event()
         self.catalog_cache = CatalogCache(self.root, self.catalog_id)
         self.clear_catalog_cache = False
@@ -582,6 +583,9 @@ class DownloaderWorker(QObject):
             raise
 
     def run(self) -> None:
+        if self.restore_paths is not None:
+            from restore_removed import run_restore
+            return run_restore(self)
         try:
             self.message.emit('Consultando o último SOL disponível na NASA...')
             catalog_latest = self._latest_nasa_sol()
@@ -660,7 +664,11 @@ class DownloaderWorker(QObject):
 
                     destination = folder / filename
                     try:
-                        if destination.exists() and destination.stat().st_size > 0:
+                        from exact_duplicates import skip_removed_image
+                        if skip_removed_image(self.root,destination):
+                            existing_count += 1
+                            self.message.emit(f'Imagem já removida e registrada: {filename} (download ignorado).')
+                        elif destination.exists() and destination.stat().st_size > 0:
                             existing_count += 1
                             self.file_progress.emit(sol, filename, 100, destination.stat().st_size, destination.stat().st_size)
                         else:

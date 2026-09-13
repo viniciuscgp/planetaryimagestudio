@@ -1,5 +1,33 @@
 # Planetary Image Studio
 
+## Duplicatas exatas
+
+Use **Ferramentas → Remover duplicatas…**, escolha pasta/SOL atual ou missão inteira e clique em **Buscar duplicatas**. A busca compara todos os pixels decodificados, com dimensões, profundidade de bits, transparência, orientação EXIF e perfil ICC compatíveis. Não usa miniaturas, tolerância ou semelhança visual. Um hash seleciona candidatos, seguido de confirmação dos bytes. Diferenças de um pixel são mantidas; imagens com múltiplos quadros ou leitura incompleta são mantidas e informadas.
+
+Revise os grupos: cada grupo mostra a imagem mantida, as cópias removíveis com caixas de seleção e as protegidas. **Qualquer arquivo `.annotations.json` protege a imagem**, mesmo vazio, ilegível ou contendo apenas histórico. A imagem aberta e documentos pendentes também são protegidos. Várias cópias anotadas são todas mantidas. A busca não exclui nada: a exclusão permanente ocorre somente ao clicar em **Excluir cópias selecionadas**, com downloads pausados. Pixels e proteção são revalidados antes de excluir.
+
+Os caminhos relativos removidos e a cópia mantida ficam em **`.duplicate_registry.json`**, na raiz da missão, gravado antes da exclusão. Curiosity, Perseverance e os acervos consultam esse registro ao baixar novamente. O bloqueio vale para aquele caminho da missão e somente enquanto a cópia mantida continuar existindo com o mesmo conteúdo de pixels. Se ela desaparecer, mudar ou o registro ficar ilegível, o download é liberado para permitir recuperação. Conserve esse registro ao mover a coleção. Metadados auxiliares `.source.json` permanecem disponíveis; o arquivo original mantido não é regravado.
+
+## Remover imagens em preto e branco
+
+Use **Ferramentas → Remover imagens em preto e branco…**, escolha pasta/SOL atual ou missão inteira e clique em **Buscar imagens em preto e branco**. Revise a lista, desmarque o que quiser manter e clique em **Excluir imagens selecionadas**. A busca não exclui arquivos; a exclusão é permanente e acontece somente pelo botão.
+
+A detecção verifica todos os pixels do arquivo original, preservando a profundidade de bits. Imagens grayscale e RGB com canais exatamente iguais são candidatas. Qualquer diferença entre os canais mantém a imagem, inclusive um único pixel: fotografias quase cinza, mas com alguma cor, não são removidas. Esta verificação é mais conservadora que a amostragem do filtro **Coloridas**. Ajustes de saturação e overlays não interferem. Arquivos ilegíveis ou com múltiplos quadros são mantidos.
+
+Imagens com arquivo de anotações (mesmo vazio ou ilegível), edições em memória e a imagem aberta ficam protegidas. Antes de excluir, a ferramenta confere novamente os pixels e as anotações. Os nomes relativos à missão são registrados em `.duplicate_registry.json` antes da exclusão, com motivo `black_and_white`. Curiosity, Perseverance e os conectores de arquivos ignoram esses nomes nos próximos downloads, mesmo sem outra cópia. O registro também cobre duplicatas cuja cópia mantida tenha sido posteriormente removida por esta ferramenta. Excluir a entrada do registro permite baixar aquele nome novamente. Metadados auxiliares e anotações não são apagados.
+
+## Baixar novamente imagens removidas
+
+Use **Ferramentas → Baixar imagens removidas automaticamente** para restaurar as imagens removidas por duplicidade ou por serem preto e branco **na missão atual**. O comando apaga `.duplicate_registry.json`, liberando os nomes para download, e abre o painel de download existente. Ele consulta os catálogos de origem e solicita apenas os nomes registrados. Arquivos já presentes, anotações, `.source.json` e o cursor do acervo são preservados. Não é necessário recomeçar todos os SOLs nem percorrer os lotes anteriores do acervo.
+
+A lista de restauração é salva na sessão antes de apagar o registro. **Parar/Continuar** permite retomar após interrupções ou falhas; imagens indisponíveis no catálogo são informadas como pendentes. Se já houver um download em andamento, pause-o antes de executar o comando. A opção só fica disponível em missões que oferecem download automático.
+
+## Perfis de ajustes
+
+A barra **Perfis de ajustes** oferece três slots fixos: **Perfil 1**, **Perfil 2** e **Perfil 3**, cada um com um botão **Salvar** ao lado. Ajuste a imagem e clique em Salvar no slot desejado; clique no nome do perfil para aplicar em outra imagem. Salvar novamente substitui aquele slot sem pedir nome. Perfis vazios ficam indisponíveis para aplicação; o botão do perfil fica destacado quando os ajustes atuais coincidem com os valores salvos.
+
+São gravados brilho, contraste, cor/saturação, meios-tons/gamma, preto, branco, nitidez, suavização, inversão, equilíbrio de cores, ativação e limites dos percentis e ativação do Auto Enhance. Aplicar atualiza os controles deslizantes, valores e botões, com uma única entrada no histórico para Desfazer/Refazer. Os perfis são globais, persistem entre reinicializações e missões e não são apagados por Resetar ajustes. Rotação, zoom, seleções e desenhos da imagem atual são preservados; não fazem parte dos perfis. Salvar um perfil não aplica processamento a outras imagens nem altera o arquivo original.
+
 ## Auto Enhance Mars Image
 
 Use **Imagem / Auto Enhance Mars Image** para aplicar automaticamente o preset aprovado: **Percentis RGB 32-99 sobre o original limpo**. Com os demais filtros desligados, o resultado e identico ao botao manual de percentis configurado em 32 e 99. Nao ha correcao de iluminacao, recoloracao, CLAHE ou mistura posterior neste preset. Os auxiliares dessas operacoes continuam no modulo, mas nao participam do automatico.

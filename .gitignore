@@ -18,4 +18,5 @@ dist/
 
 *.source.json
 .archive-download.json
+.duplicate_registry.json
 *_state.json.*.bak

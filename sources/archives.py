@@ -155,6 +155,9 @@ class ArchiveWorker(DownloaderWorker):
         self.batch_size=batch_size
 
     def run(self):
+        if self.restore_paths is not None:
+            from restore_removed import run_restore
+            return run_restore(self)
         try:
             self.root.mkdir(parents=True,exist_ok=True)
             state_path=self.root/STATE_FILE
@@ -191,7 +194,11 @@ class ArchiveWorker(DownloaderWorker):
                     filename=safe_name(Path(urlparse(url).path).name)
                     destination=folder/filename
                     self.file_started.emit(key,filename,i,total)
-                    if destination.exists() and destination.stat().st_size:
+                    from exact_duplicates import skip_removed_image
+                    if skip_removed_image(self.root,destination):
+                        existing+=1
+                        self.message.emit(f'Imagem já removida e registrada: {filename} (download ignorado).')
+                    elif destination.exists() and destination.stat().st_size:
                         existing+=1
                     else:
                         self._download_file(key,url,destination,filename)

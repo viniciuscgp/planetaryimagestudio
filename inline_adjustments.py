@@ -104,6 +104,7 @@ class InlineAdjustmentsMixin:
                 control.blockSignals(True)
                 control.setValue(round(value * factor) if control is slider else value)
                 control.blockSignals(False)
+        self._sync_adjustment_profiles()
 
     def _focus_inline_adjustment(self, key):
         slider, spin, widget, toolbar, factor = self._inline_controls[key]

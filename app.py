@@ -22,6 +22,7 @@ from sol_annotations import SolAnnotationsMixin, AnnotationThumbnailDelegate
 from image_smoothing import SmoothingDialog, smooth_image
 from image_adjustments import AdjustmentDialog, apply_adjustments
 from inline_adjustments import InlineAdjustmentsMixin
+from adjustment_profiles import AdjustmentProfilesMixin, load_profiles
 from toolbar_appearance import ToolbarAppearanceMixin
 
 from PySide6.QtCore import QByteArray, QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThread, QThreadPool, QTimer, Signal
@@ -557,10 +558,11 @@ class ImageAboutDialog(QDialog):
         layout.addLayout(buttons)
 
 
-class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
+class MainWindow(AdjustmentProfilesMixin, ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsMixin, ImageFiltersMixin, AnnotationWindowMixin, QMainWindow):
     def __init__(self, root: Path, initial_state: dict[str, Any] | None = None, source: ImageSource | str | None = None) -> None:
         super().__init__()
         self._state = dict(initial_state or load_app_state())
+        self._adjustment_profiles = load_profiles(self._state.get('adjustment_profiles'))
         self.missions = MissionRegistry(self._state, current_root=root)
         requested = source.id if isinstance(source, ImageSource) else (source or self._state.get("active_mission_id") or self._state.get("source", "curiosity"))
         if requested not in self.missions.profiles:
@@ -636,6 +638,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self._build_toolbar()
         self._build_annotation_toolbar()
         self._build_inline_adjustments()
+        self._build_adjustment_profiles()
         self._init_toolbar_appearance()
         self._init_sol_annotations()
         self._load_sol_list()
@@ -847,6 +850,10 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.act_percentile_stretch = self._make_action("Expansão por Percentis (Percentile Stretch)", self._toggle_percentile_stretch)
         self.act_percentile_stretch.setCheckable(True)
         self.act_forensic_texture = self._make_action("Forensic Texture Analysis", self._open_forensic_texture)
+        self.act_duplicates = self._make_action('Remover duplicatas…',self._open_duplicates)
+        self.act_remove_monochrome = self._make_action('Remover imagens em preto e branco…',self._open_monochrome_cleanup)
+        self.act_restore_removed = self._make_action('Baixar imagens removidas automaticamente',self._restore_removed_images)
+        self.act_restore_removed.setToolTip('Libera os nomes removidos da missão atual e baixa novamente, preservando anotações.')
         self.act_morphological = self._make_action("Morphological Analysis · Área marcada", self._open_morphological)
         self.act_magic_wand = self._make_action("Varinha mágica", self._open_magic_wand, "V")
         self.act_open_root = self._make_action("Abrir coleção...", self._choose_root, QKeySequence.StandardKey.Open)
@@ -949,6 +956,12 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         menu_image.addAction(self.act_export_auto_stages)
         menu_image.addSeparator()
         menu_image.addAction(self.act_original)
+
+        menu_tools = self.menuBar().addMenu('Ferramentas')
+        menu_tools.addAction(self.act_duplicates)
+        menu_tools.addAction(self.act_remove_monochrome)
+        menu_tools.addSeparator()
+        menu_tools.addAction(self.act_restore_removed)
 
         self.analysis_menu = self.menuBar().addMenu("Análise")
         self.analysis_menu.addAction(self.act_forensic_texture)
@@ -1166,7 +1179,8 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         download_state = self._state.get("download")
         if isinstance(download_state, dict):
             mode = download_state.get("mode")
-            self._download_mode = str(mode) if mode in ("update", "from_sol", "only_sol") else None
+            self._download_mode = str(mode) if mode in ("update", "from_sol", "only_sol", "restore_removed") else None
+            self._download_restore_paths = download_state.get('restore_paths',[])
             requested = download_state.get("requested_start_sol")
             resume_sol = download_state.get("resume_sol")
             current_file = download_state.get("current_file")
@@ -1214,6 +1228,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             "toolbar_text": self.act_toolbar_text.isChecked(),
             "auto_zoom": self.act_auto_zoom.isChecked(),
             "image_filters": self._image_filter_state(),
+            "adjustment_profiles": load_profiles(self._adjustment_profiles),
             "splitter_sizes": [int(v) for v in sizes],
             "thumbnail_panel_height": self._thumb_panel_height,
             "download_panel_open": bool(self._download_panel_open),
@@ -1236,6 +1251,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
                 "requested_start_sol": self._download_requested_start_sol,
                 "resume_sol": self._download_resume_sol,
                 "current_file": self._download_current_file,
+                "restore_paths": getattr(self,'_download_restore_paths',[]) if self._download_mode=='restore_removed' else [],
             },
         }
 
@@ -1255,6 +1271,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             return
 
         mode = download_state.get("mode")
+        if mode == 'restore_removed':
+            self._launch_downloader(restore_paths=download_state.get('restore_paths',[]))
+            return
         resume_sol = download_state.get("resume_sol")
         requested = download_state.get("requested_start_sol")
         if not isinstance(resume_sol, int):
@@ -1297,8 +1316,13 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self,
         only_sol: int | None = None,
         start_sol: int | None = None,
+        restore_paths: list[str] | None = None,
     ) -> None:
         if self._closing or not self.source.supports_downloads:
+            return
+        duplicates = getattr(self,'_duplicate_dialog',None)
+        if duplicates is not None and duplicates.removing:
+            self.download_status.setText('Aguarde a exclusão de imagens antes de iniciar downloads.')
             return
         if self._download_thread is not None and self._download_thread.isRunning():
             self.download_status.setText("O downloader já está em execução.")
@@ -1310,7 +1334,12 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.download_stop_button.setText("Parar")
         self.act_download_stop.setText("Parar downloader")
         self._download_pending_resume = True
-        if only_sol is not None:
+        self._download_restore_paths = list(restore_paths or [])
+        if restore_paths is not None:
+            self._download_mode = 'restore_removed'
+            self._download_requested_start_sol = None
+            self._download_resume_sol = None
+        elif only_sol is not None:
             self._download_mode = "only_sol"
             self._download_requested_start_sol = only_sol
             self._download_resume_sol = only_sol
@@ -1343,6 +1372,10 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             self.download_status.setText("Preparando lote de observações...")
             history_text = "▶ Lote de observações iniciado"
         self.download_file_label.setText("Arquivo: —")
+        if restore_paths is not None:
+            self.download_sol_label.setText('Restaurando imagens removidas')
+            self.download_status.setText(f'Preparando restauração de {len(restore_paths)} imagens…')
+            history_text = f'▶ Restauração de {len(restore_paths)} imagens removidas iniciada'
         self.download_stats.setText("Verificando imagens faltantes...")
         self.download_sol_progress.setRange(0, 0)
         self.download_file_progress.setRange(0, 100)
@@ -1364,6 +1397,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
             only_sol=only_sol,
             start_sol=start_sol,
         )
+        worker.restore_paths = restore_paths
         worker.moveToThread(thread)
         if self._catalog_reload_requested:
             worker.clear_catalog_cache = True
@@ -1574,7 +1608,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
 
     def _on_download_sol_finished(self, sol: int, total: int, new_count: int, existing_count: int) -> None:
         self._download_current_file = None
-        if self._download_mode != "only_sol":
+        if self._download_mode not in ("only_sol", "restore_removed"):
             self._download_resume_sol = sol + 1
         self._save_state(pending_resume=True)
         self.download_stats.setText(
@@ -1652,6 +1686,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
     # ---------- Folder/Sol/Image loading ----------
     def _update_source_controls(self) -> None:
         downloads = self.source.supports_downloads
+        self.act_restore_removed.setEnabled(downloads)
         self.act_clear_catalog_cache.setEnabled(downloads and getattr(self.source, 'uses_sols', True))
         self._sync_download_pause_button()
         if not downloads:
@@ -1761,6 +1796,7 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         target["toolbar_layout"] = previous["toolbar_layout"]
         target["toolbar_text"] = previous["toolbar_text"]
         target["auto_zoom"] = previous["auto_zoom"]
+        target["adjustment_profiles"] = previous["adjustment_profiles"]
         self._state_ready = False
         self.source = self.missions.source_for(mission_id)
         self.root = folder.resolve()
@@ -2043,6 +2079,60 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
         self.percentile_stretch = enabled
         self._render_current(fit=False)
         self._commit_adjustments()
+
+    def _open_duplicates(self):
+        self._open_image_cleanup()
+
+    def _restore_removed_images(self):
+        if self._closing or not self.source.supports_downloads:
+            return
+        if self._download_thread is not None and self._download_thread.isRunning():
+            QMessageBox.information(self,'Restaurar imagens','Pause o download atual antes de restaurar as imagens removidas.')
+            return
+        cleanup=getattr(self,'_duplicate_dialog',None)
+        if cleanup is not None and cleanup.worker is not None:
+            QMessageBox.information(self,'Restaurar imagens','Aguarde a busca ou exclusão de imagens terminar.')
+            return
+        from exact_duplicates import REGISTRY,read_registry
+        from restore_removed import validated_paths
+        try:
+            paths=validated_paths(self.root,read_registry(self.root)['removed'])
+            if not paths:
+                if self._download_mode=='restore_removed' and (self._download_paused or self._download_pending_resume):
+                    self._set_download_panel_open(True)
+                    self._launch_downloader(restore_paths=getattr(self,'_download_restore_paths',[]))
+                    return
+                QMessageBox.information(self,'Restaurar imagens','Não há imagens removidas registradas nesta missão.')
+                return
+            # Persist the retry list before deleting the download exclusions.
+            previous=(self._download_mode,getattr(self,'_download_restore_paths',[]))
+            self._download_mode='restore_removed';self._download_restore_paths=paths
+            try:
+                if not self._save_state(pending_resume=True):
+                    raise OSError('Não foi possível salvar a lista de restauração. O registro de exclusões foi mantido.')
+                (self.root/REGISTRY).unlink()
+            except Exception:
+                self._download_mode,self._download_restore_paths=previous
+                self._save_state()
+                raise
+        except Exception as exc:
+            QMessageBox.warning(self,'Restaurar imagens',str(exc))
+            return
+        self._set_download_panel_open(True)
+        self._launch_downloader(restore_paths=paths)
+
+    def _open_monochrome_cleanup(self):
+        self._open_image_cleanup(monochrome=True)
+
+    def _open_image_cleanup(self,monochrome=False):
+        self._flush_inline_adjustments()
+        from duplicate_ui import DuplicateDialog
+        dialog = self._duplicate_dialog = DuplicateDialog(self,monochrome=monochrome)
+        dialog.exec()
+        if dialog.removed and not self._closing:
+            self._load_sol_list()
+        self._duplicate_dialog = None
+        dialog.deleteLater()
 
     def _open_forensic_texture(self):
         if self.original_image is None or self.current_path is None:
@@ -2335,7 +2425,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
     def _background_tasks_running(self):
         thread = self._download_thread
         dock = getattr(self,'_forensic_dock',None)
+        duplicates = getattr(self,'_duplicate_dialog',None)
         return bool((thread is not None and thread.isRunning())
+                    or (duplicates is not None and duplicates.worker is not None)
                     or (dock is not None and dock.panel.worker is not None)
                     or self.thread_pool.activeThreadCount()
                     or self._filter_pool.activeThreadCount())
@@ -2359,6 +2451,9 @@ class MainWindow(ToolbarAppearanceMixin, InlineAdjustmentsMixin, SolAnnotationsM
                 event.ignore()
                 return
             self._closing = True
+            duplicates = getattr(self,'_duplicate_dialog',None)
+            if duplicates is not None:
+                duplicates.close()
             dock = getattr(self,'_forensic_dock',None)
             if dock is not None:
                 dock.panel.cancel_analysis()
