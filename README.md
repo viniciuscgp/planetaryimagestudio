@@ -38,7 +38,7 @@ Original em disco, desenhos, zoom, Undo/Redo e Reset continuam no fluxo existent
 
 **Imagem / Salvar etapas do Auto Enhance** continua exportando oito PNGs e parameters.json para uma pasta nova. Por compatibilidade, os nomes antigos permanecem: illumination_corrected e o original; white_balance e final_clahe repetem o resultado dos percentis. O mapa illumination e o NPY contem zeros, identificados nos metadados como placeholders de uma etapa desativada. A exportacao usa o original limpo, sem desenhos ou ajustes manuais.
 
-Testes: `python -m unittest test_auto_enhance_mars test_percentile_stretch`.
+Testes: `python -m unittest tests.test_auto_enhance_mars tests.test_percentile_stretch`.
 
 ## Expansão por Percentis (Percentile Stretch)
 
@@ -46,7 +46,7 @@ Use **Imagem → Expansão por Percentis (Percentile Stretch)**, o menu do botã
 
 Cada canal RGB recebe `(pixel − p_low) × 255 / (p_high − p_low)`, com clipping e arredondamento para 8 bits. Pixels do original com todos os canais ≤ 5, ou alfa zero, são excluídos do cálculo dos percentis. A transformação é aplicada normalmente à imagem; o alfa é preservado. Se não houver pixels válidos, o ajuste não modifica o resultado; canais sem variação entre os percentis permanecem inalterados. A máscara é obtida do original, para que inversão/brilho não transformem uma borda inválida em uma amostra válida.
 
-O ajuste integra `apply_adjustments()` após os outros ajustes de pixels e antes das marcações/rotação, usando a imagem de trabalho resultante. Não acumula novas expansões a cada renderização. Parâmetros e ativação usam o histórico de anotações existente, com **Desfazer/Refazer**, restauração por imagem, **Comparar original**, cópia/exportação final e filtro **Editadas**. **Resetar ajustes** desativa a expansão e restaura 1–99. Executar o ajuste nunca sobrescreve o arquivo original; o estado é salvo no arquivo de anotações, como nos demais filtros. Testes: `python -m unittest test_percentile_stretch -v`.
+O ajuste integra `apply_adjustments()` após os outros ajustes de pixels e antes das marcações/rotação, usando a imagem de trabalho resultante. Não acumula novas expansões a cada renderização. Parâmetros e ativação usam o histórico de anotações existente, com **Desfazer/Refazer**, restauração por imagem, **Comparar original**, cópia/exportação final e filtro **Editadas**. **Resetar ajustes** desativa a expansão e restaura 1–99. Executar o ajuste nunca sobrescreve o arquivo original; o estado é salvo no arquivo de anotações, como nos demais filtros. Testes: `python -m unittest tests.test_percentile_stretch -v`.
 
 ## Varinha mágica — seleção por tolerância
 
@@ -54,7 +54,7 @@ Abra **Análise → Varinha mágica**, pressione **V** ou use o ícone de varinh
 
 Uma tolerância baixa seleciona uma faixa restrita de cor; aumentá-la inclui mais variação nos pixels conectados. A varinha usa o original, sem ajustes ou desenhos, mantém a rotação na prévia e funciona offline, sem IA ou reconhecimento de figuras. Se figura e fundo têm cores semelhantes ou estão conectados, a seleção pode atravessar esse limite: confira a prévia antes de aplicar. **Cancelar** não cria marcação.
 
-**Criar marcação** converte o resultado em contornos fechados do sistema de anotações existente, incluindo vazios internos. O contorno fica selecionado e pode ser movido, redimensionado, excluído, salvo e desfeito/refeito; em seguida use **Morphological Analysis · Área marcada**. A conversão dos pixels para contornos editáveis pode diferir aproximadamente um pixel nas bordas. Os dados usam o tipo `polygon`, com pontos e comprimentos dos anéis no mesmo arquivo `.annotations.json`. Nenhum pixel original é alterado. Cálculo em `magic_wand.py`, prévia em `magic_wand_ui.py`; teste específico: `python -m unittest test_magic_wand -v`.
+**Criar marcação** converte o resultado em contornos fechados do sistema de anotações existente, incluindo vazios internos. O contorno fica selecionado e pode ser movido, redimensionado, excluído, salvo e desfeito/refeito; em seguida use **Morphological Analysis · Área marcada**. A conversão dos pixels para contornos editáveis pode diferir aproximadamente um pixel nas bordas. Os dados usam o tipo `polygon`, com pontos e comprimentos dos anéis no mesmo arquivo `.annotations.json`. Nenhum pixel original é alterado. Cálculo em `magic_wand.py`, prévia em `magic_wand_ui.py`; teste específico: `python -m unittest tests.test_magic_wand -v`.
 
 ## Fase 2 — Análise morfológica da área marcada
 
@@ -68,7 +68,7 @@ A região em análise permanece contornada em **ciano**. A janela exibe a imagem
 
 Uma candidata a abertura exige componente escuro alongado, contraste com seu anel interno à marcação, dois lados com ajustes aproximadamente paralelos e término afastado do limite da seleção. As medidas incluem extensão projetada (não comprimento percorrido de uma fissura curva), espessura média, orientação, intensidade, contraste, erro dos ajustes e suporte do entorno. Esse suporte descreve continuidade local de pixels, não uma conexão física comprovada. Não se infere profundidade de cavidades nem se reconhecem objetos. A silhueta por contraste pode falhar com iluminação ou texturas complexas; nesse caso o resumo informa que área, orientação e simetria descrevem o limite marcado, sem apresentá-lo como um contorno descoberto.
 
-Teste específico: `python -m unittest test_morphological_region -v`.
+Teste específico: `python -m unittest tests.test_morphological_region -v`.
 
 ## Forensic Texture Analysis
 
@@ -109,7 +109,7 @@ As três medidas escalares de energia/detalhe/gradiente usam `log1p` antes da no
 
 **O score é uma medida relativa, não uma probabilidade de manipulação.** Texturas naturais, iluminação, distância, foco e processamento da câmera podem gerar diferenças. A comparação contextual reduz esse efeito, mas não identifica materiais nem elimina falsos positivos. A periodicidade módulo 8 é uma assinatura de pixels, não uma inspeção dos coeficientes JPEG; redimensionamento e orientação podem mudar sua fase. Grandes imagens exigem mais tempo e memória, pois não são reduzidas antes da medição.
 
-Dependências adicionais: NumPy e OpenCV (`opencv-python-headless`, sem outra interface gráfica). Instale com o ambiente virtual do projeto: `python -m pip install -r requirements.txt`. Depois de instaladas, a análise não acessa a rede. Testes específicos: `python -m unittest test_forensic_texture -v`.
+Dependências adicionais: NumPy e OpenCV (`opencv-python-headless`, sem outra interface gráfica). Instale com o ambiente virtual do projeto: `python -m pip install -r requirements.txt`. Depois de instaladas, a análise não acessa a rede. Testes específicos: `python -m unittest tests.test_forensic_texture -v`.
 
 Aplicativo desktop em Python para visualizar, ajustar e marcar imagens de planetas e luas, sem modificar os originais.
 
@@ -138,8 +138,9 @@ O projeto pode ficar separado das coleções. Exemplo:
 pesquisas/
 ├── planetary_image_studio/
 │   ├── main.py
-│   ├── app.py
-│   └── sources/
+│   └── planetary_studio/
+│       ├── app.py
+│       └── sources/
 ├── marte/
 │   └── missions/
 │       ├── curiosity/
@@ -257,37 +258,40 @@ Na missão Curiosity, o `About` requer conexão com a Internet. Primeiro o progr
 
 ## Sessões e compatibilidade
 
-As configurações são salvas em `planetary_image_studio_state.json`, junto ao projeto, com alternativa em `.planetary_image_studio_state.json` na pasta pessoal quando necessário. Uma sessão antiga em `curiosity_viewer_state.json` ou `.curiosity_sol_viewer_state.json` é migrada automaticamente quando não existe sessão nova válida. O arquivo antigo permanece como backup.
+As configurações são salvas em `data/planetary_image_studio_state.json`, com alternativa em `.planetary_image_studio_state.json` na pasta pessoal quando necessário. Sessões anteriores na raiz do projeto e sessões antigas em `curiosity_viewer_state.json` ou `.curiosity_sol_viewer_state.json` continuam sendo lidas e migradas automaticamente. O arquivo antigo permanece como backup. A pasta `data/` e seus backups são locais e não entram no Git.
 
 As pastas `SOLxxxx`, os arquivos originais e os acompanhamentos `*.annotations.json` continuam válidos. A mudança do nome do projeto não exige renomear as coleções ou as anotações.
 
 ## Estrutura para desenvolvimento
 
 ```text
-main.py                       # Entrada do aplicativo
-app.py                        # Interface e visualizacao
-config.py                     # Identidade, sessao e migracao
-missions.py                   # Perfis e caminhos por planeta e missao
-mission_settings.py           # Tela de configuracao
-mission_catalog.py            # Catalogo inicial de missoes
-catalog.py                    # Descoberta de imagens
-image_annotations.py          # Desenhos, ajustes e salvamento
-annotation_editing.py         # Selecao, handles e exportacao
-sources/
-    base.py                   # Contrato para fontes de imagens
-    curiosity.py              # SOLs, metadados e download Curiosity
-    perseverance.py           # Feed de imagens completas por SOL
-    archives.py               # HiRISE, LROC, ESA HRSC e Kaguya
-    local.py                  # Colecoes locais de Lua e outros
-    __init__.py               # Registro das fontes disponiveis
+main.py                       # Entrada compatível com os atalhos existentes
+planetary_studio/             # Código do aplicativo
+    __main__.py               # Entrada via python -m planetary_studio
+    app.py                    # Janela principal e integração
+    config.py                 # Identidade, sessão e migração
+    ui/                       # Painéis, diálogos, barras e controles
+    processing/               # Ajustes, seleção e análise de imagens
+    annotations/              # Desenhos, edição e persistência de anotações
+    collections/              # Missões, catálogo, limpeza e restauração
+    sources/                  # Conectores de fontes de imagens e downloads
+tests/                        # Testes automatizados
+docs/images/                  # Capturas e imagens de documentação
+data/                         # Sessões e backups locais (ignorado pelo Git)
+artifacts/                    # Resultados gerados localmente (ignorado pelo Git)
+requirements.txt              # Dependências
+executar_*.bat / executar_*.sh # Atalhos de execução na raiz
+instalar_*.bat / instalar_*.sh # Atalhos de instalação na raiz
 ```
 
-Para adicionar uma missão, implemente `ImageSource` e registre a fonte em `sources/__init__.py`. A interface consulta as coleções e capacidades dessa fonte; as ferramentas de imagem e anotações são compartilhadas. Atribua o backend validado à entrada correspondente em `mission_catalog.py`.
+Para adicionar uma missão, implemente `ImageSource` e registre a fonte em `planetary_studio/sources/__init__.py`. A interface consulta as coleções e capacidades dessa fonte; as ferramentas de imagem e anotações são compartilhadas. Atribua o backend validado à entrada correspondente em `planetary_studio/collections/mission_catalog.py`.
+
+Execute pela raiz com `python main.py`, `python -m planetary_studio` ou pelos atalhos existentes. Os imports internos usam o pacote `planetary_studio`; não é necessário configurar `PYTHONPATH`.
 
 Execute os testes offline com:
 
 ```bash
-python -m unittest discover -v
+python -m unittest discover -s tests -t . -v
 ```
 
 O `.gitignore` exclui o ambiente virtual, caches, sessões pessoais e anotações de pesquisa do futuro repositório.

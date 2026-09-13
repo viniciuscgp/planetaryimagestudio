@@ -1,4 +1,4 @@
-"""Launch Planetary Image Studio."""
+"""Run the desktop application with python -m planetary_studio."""
 
 from planetary_studio.app import main
 

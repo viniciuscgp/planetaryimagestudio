@@ -13,6 +13,7 @@ dist/
 *.tmp
 *.part
 /data/
+/artifacts/
 /images/
 .env
 
